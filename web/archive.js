@@ -20,6 +20,13 @@
     return response.json();
   }
 
+  function osVersion(os) {
+    if (!os) return '';
+    const parts = [Math.floor(os / 10000), Math.floor(os / 100) % 100];
+    if (os % 100) parts.push(os % 100);
+    return parts.join('.');
+  }
+
   async function load() {
     if (loading || entries) return;
     loading = true;
@@ -32,8 +39,15 @@
       for (const [, device, os, title, bundle, version, collection, path, size] of rows) {
         const base = bases[collection];
         if (!base?.startsWith('https://archive.org/download/') || !path?.toLowerCase().endsWith('.ipa')) continue;
-        entries.push({ device, os, title: title || bundle || path, bundle, version, base, path, size,
-          search: [title, bundle, path].join(' ').toLowerCase() });
+        const minOS = osVersion(os);
+        const collectionName = base.slice('https://archive.org/download/'.length);
+        entries.push({ device, os, minOS, collectionName, title: title || bundle || path, bundle, version, base, path, size,
+          search: [title, bundle, path, collectionName, minOS && 'iphone os ' + minOS,
+            minOS && 'ios ' + minOS].join(' ').toLowerCase() });
+      }
+      const versions = new Set(entries.map(game => game.os).filter(Boolean));
+      for (const os of [...versions].sort((a, b) => a - b)) {
+        el('os').add(new Option('Min. iOS ' + osVersion(os), String(os)));
       }
       filter();
     } catch (error) {
@@ -49,8 +63,14 @@
   function filter() {
     if (!entries) return;
     const device = Number(el('device').value);
+    const os = Number(el('os').value);
     const query = el('search').value.trim().toLowerCase();
-    matches = entries.filter(game => (!device || (game.device & device)) && game.search.includes(query));
+    const osQuery = /^(?:iphone\s+os|ios|os)\s*(\d+(?:\.\d+){0,2})$/.exec(query);
+    matches = entries.filter(game => {
+      if ((device && !(game.device & device)) || (os && game.os !== os)) return false;
+      if (osQuery) return game.minOS === osQuery[1] || game.minOS.startsWith(osQuery[1] + '.');
+      return game.search.includes(query);
+    });
     page = 0;
     render();
   }
@@ -71,13 +91,11 @@
       title.textContent = game.title;
       const meta = document.createElement('small');
       meta.className = 'archive-meta';
-      const os = [Math.floor(game.os / 10000), Math.floor(game.os / 100) % 100];
-      if (game.os % 100) os.push(game.os % 100);
-      meta.textContent = [game.version && 'v' + game.version, game.os && 'iOS ' + os.join('.') + '+',
+      meta.textContent = [game.version && 'v' + game.version, game.minOS && 'iOS ' + game.minOS + '+',
         game.size && (game.size / 1024).toFixed(1) + ' MB'].filter(Boolean).join(' · ');
       const collection = document.createElement('small');
       collection.className = 'archive-meta';
-      collection.textContent = game.base.slice('https://archive.org/download/'.length);
+      collection.textContent = game.collectionName;
       info.append(title, meta, collection);
       const button = document.createElement('button');
       button.className = 'small';
@@ -129,6 +147,7 @@
   dialog.addEventListener('close', () => transfer?.abort());
   el('retry').onclick = load;
   el('device').onchange = filter;
+  el('os').onchange = filter;
   el('search').oninput = filter;
   el('prev').onclick = () => { page--; render(); results.scrollTop = 0; };
   el('next').onclick = () => { page++; render(); results.scrollTop = 0; };
