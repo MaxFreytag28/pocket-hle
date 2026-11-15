@@ -571,21 +571,54 @@ for (const type of ['keydown', 'keypress', 'keyup']) {
 // A line in the log every 10 seconds while a game runs, saying how much it
 // drew and how many taps reached it. When a game seems frozen, this tells
 // whether the game stopped or only the picture did.
-const heartbeat = { draws: 0, taps: 0, frames: 0 };
+// It also reports graphics errors: texture uploads are always checked, other
+// calls during one second out of every ten (checking is slow).
+const heartbeat = { draws: 0, taps: 0, frames: 0, checking: true, errors: new Map() };
+const GL_ALWAYS_CHECKED = new Set(['texImage2D', 'texSubImage2D', 'compressedTexImage2D', 'renderbufferStorage', 'framebufferRenderbuffer', 'framebufferTexture2D']);
 for (const Context of [window.WebGL2RenderingContext, window.WebGLRenderingContext]) {
   if (!Context) continue;
-  for (const name of ['drawArrays', 'drawElements']) {
+  const names = ['drawArrays', 'drawElements', 'bufferData', 'vertexAttribPointer', 'useProgram',
+    'bindFramebuffer', 'bindTexture', 'texParameteri', 'copyTexImage2D', 'readPixels', ...GL_ALWAYS_CHECKED];
+  for (const name of names) {
     const original = Context.prototype[name];
-    Context.prototype[name] = function (...args) { heartbeat.draws++; return original.apply(this, args); };
+    if (!original) continue;
+    const isDraw = name === 'drawArrays' || name === 'drawElements';
+    const always = GL_ALWAYS_CHECKED.has(name);
+    Context.prototype[name] = function (...args) {
+      if (isDraw) heartbeat.draws++;
+      const result = original.apply(this, args);
+      if (always || heartbeat.checking) {
+        const error = this.getError();
+        if (error) {
+          const key = name + ' 0x' + error.toString(16);
+          heartbeat.errors.set(key, (heartbeat.errors.get(key) || 0) + 1);
+        }
+      }
+      return result;
+    };
   }
 }
+setInterval(() => {
+  heartbeat.checking = true;
+  setTimeout(() => { heartbeat.checking = false; }, 1000);
+}, 10000);
+setTimeout(() => { heartbeat.checking = false; }, 1000);
+document.getElementById('canvas').addEventListener('webglcontextlost', () => {
+  log('[graphics] The browser dropped the graphics context: nothing more can be drawn.');
+});
+document.getElementById('canvas').addEventListener('webglcontextrestored', () => {
+  log('[graphics] The graphics context came back (the game does not know, so it may stay blank).');
+});
 document.getElementById('canvas').addEventListener('pointerdown', () => { heartbeat.taps++; }, true);
 (function countFrames() { heartbeat.frames++; requestAnimationFrame(countFrames); })();
 setInterval(() => {
   if (!document.body.classList.contains('playing')) return;
   log('[heartbeat] last 10 s: ' + heartbeat.draws + ' draw calls, ' + heartbeat.frames +
-    ' screen updates, ' + heartbeat.taps + ' taps' + (document.hidden ? ' (page hidden)' : ''));
+    ' screen updates, ' + heartbeat.taps + ' taps' + (document.hidden ? ' (page hidden)' : '') +
+    (heartbeat.errors.size ? ' | graphics errors: ' +
+      [...heartbeat.errors].map(([key, count]) => key + ' ×' + count).join(', ') : ''));
   heartbeat.draws = heartbeat.taps = heartbeat.frames = 0;
+  heartbeat.errors.clear();
 }, 10000);
 
 // For development: with ?debug in the address, the last frame drawn stays
@@ -1017,7 +1050,7 @@ async function updateEntry(key, change) {
 // How well each game is known to run. Keyed by the game's identifier.
 const COMPATIBILITY = {
   'com.rocketcat.HookChamp': ['good', 'Plays well: levels, saves, name entry and sound.'],
-  'com.sandlotgames.iSM': ['partly', 'Menus and levels start, but the 3D track is drawn too small.'],
+  'com.sandlotgames.iSM': ['partly', 'Intro, menus and levels now show correctly; not played through yet.'],
   'com.sandlotgames.snailmail': ['partly', 'iPad version: gets to name entry on a computer; not yet tried in the browser.'],
 };
 const COMPAT_LABELS = { good: 'Works', partly: 'Partly works', untested: 'Not tried yet' };
@@ -1181,8 +1214,9 @@ async function resetProgress(bundleId) {
 }
 
 // Version and what changed in it, shown once after each update.
-const VERSION = '2026.11.15.2';
+const VERSION = '2026.11.15.3';
 const WHATS_NEW = [
+  'Snail Mail no longer freezes after the intro, and its intro and levels draw correctly.',
   'A cleaner, calmer look for the hub.',
   'Tap ⋯ on a game for its details, to rename it, reset its progress or remove it.',
   'Games show their real names, and whether they are known to work.',

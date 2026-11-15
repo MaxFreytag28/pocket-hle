@@ -521,6 +521,8 @@ pub struct GLES1OnGLES2 {
     current_normal: [GLfloat; 3],
     /// The buffer bound to `GL_ARRAY_BUFFER`.
     array_buffer: GLuint,
+    /// The buffer bound to `GL_ELEMENT_ARRAY_BUFFER`.
+    element_array_buffer: GLuint,
 
     alpha_test: bool,
     alpha_func: GLenum,
@@ -537,6 +539,115 @@ fn gl_type_size(type_: GLenum) -> usize {
         gles11::BYTE | gles11::UNSIGNED_BYTE => 1,
         gles11::SHORT | gles11::UNSIGNED_SHORT => 2,
         _ => 4,
+    }
+}
+
+/// Under Emscripten: copies of the contents of index buffers
+/// (`GL_ELEMENT_ARRAY_BUFFER`), by buffer name, because WebGL can't read them
+/// back and [GLES1OnGLES2::draw_elements_unindexed] needs them. Buffers are
+/// shared between contexts, so this is too.
+static INDEX_BUFFER_COPIES: Mutex<Option<HashMap<GLuint, Vec<u8>>>> = Mutex::new(None);
+
+impl GLES1OnGLES2 {
+    /// Under Emscripten, arrays given as pointers are copied into buffers for
+    /// WebGL by Emscripten, but only as many vertices as there are indices.
+    /// Indices often refer to more vertices than that (a mesh drawn with a
+    /// few indices into many vertices), and when the indices themselves are
+    /// in a buffer, Emscripten copies no vertices at all. WebGL then refuses
+    /// to draw. In those cases, look up the vertices here and draw them in order with
+    /// `glDrawArrays`, which Emscripten copies correctly. Returns `false` if
+    /// the normal path is fine (or this can't help).
+    unsafe fn draw_elements_unindexed(
+        &mut self,
+        mode: GLenum,
+        count: GLsizei,
+        type_: GLenum,
+        indices: *const GLvoid,
+    ) -> bool {
+        if count <= 0 || !self.vertex_array.enabled {
+            return false;
+        }
+        let count = count as usize;
+        let index_size = match type_ {
+            gles11::UNSIGNED_BYTE => 1,
+            gles11::UNSIGNED_SHORT => 2,
+            _ => return false,
+        };
+        let index_bytes: Vec<u8> = if self.element_array_buffer != 0 {
+            // `indices` is an offset into the bound index buffer.
+            let copies = INDEX_BUFFER_COPIES.lock().unwrap();
+            let Some(copy) = copies.as_ref().and_then(|c| c.get(&self.element_array_buffer)) else {
+                return false;
+            };
+            let start = indices as usize;
+            let Some(bytes) = copy.get(start..start + count * index_size) else {
+                return false;
+            };
+            bytes.to_vec()
+        } else {
+            std::slice::from_raw_parts(indices.cast::<u8>(), count * index_size).to_vec()
+        };
+        let index_list: Vec<usize> = if index_size == 1 {
+            index_bytes.iter().map(|&i| i as usize).collect()
+        } else {
+            index_bytes
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]) as usize)
+                .collect()
+        };
+        let max_index = index_list.iter().copied().max().unwrap();
+        // Emscripten copies enough itself when the indices are in memory and
+        // don't go past their own count.
+        if self.element_array_buffer == 0 && max_index < count {
+            return false;
+        }
+        // All enabled arrays must be pointers: one in a buffer would still
+        // need the indices.
+        let mut arrays: Vec<&mut ArrayState> = vec![&mut self.vertex_array, &mut self.color_array];
+        for unit in self.units.iter_mut() {
+            arrays.push(&mut unit.tex_coord_array);
+        }
+        arrays.retain(|array| array.enabled);
+        if arrays.iter().any(|array| array.buffer != 0) {
+            return false;
+        }
+        let mut copies: Vec<Vec<u8>> = Vec::new();
+        let mut saved = Vec::new();
+        for array in arrays.iter_mut() {
+            let element_size = array.size as usize * gl_type_size(array.type_);
+            let stride = if array.stride == 0 {
+                element_size
+            } else {
+                array.stride as usize
+            };
+            let mut copy = Vec::with_capacity(count * element_size);
+            for &index in &index_list {
+                let element = std::slice::from_raw_parts(
+                    array.pointer.cast::<u8>().add(index * stride),
+                    element_size,
+                );
+                copy.extend_from_slice(element);
+            }
+            saved.push((array.pointer, array.stride));
+            array.pointer = copy.as_ptr().cast();
+            array.stride = 0;
+            copies.push(copy);
+        }
+        drop(arrays);
+        if self.prepare_draw() {
+            gl::DrawArrays(mode, 0, count as GLsizei);
+        }
+        let mut arrays: Vec<&mut ArrayState> = vec![&mut self.vertex_array, &mut self.color_array];
+        for unit in self.units.iter_mut() {
+            arrays.push(&mut unit.tex_coord_array);
+        }
+        arrays.retain(|array| array.enabled);
+        for (array, (pointer, stride)) in arrays.into_iter().zip(saved) {
+            array.pointer = pointer;
+            array.stride = stride;
+        }
+        drop(copies);
+        true
     }
 }
 
@@ -842,6 +953,7 @@ impl GLES for GLES1OnGLES2 {
             current_color: [1.0; 4],
             current_normal: [0.0, 0.0, 1.0],
             array_buffer: 0,
+            element_array_buffer: 0,
             alpha_test: false,
             alpha_func: gles11::ALWAYS,
             alpha_ref: 0.0,
@@ -1282,8 +1394,15 @@ impl GLES for GLES1OnGLES2 {
     unsafe fn DeleteBuffers(&mut self, n: GLsizei, buffers: *const GLuint) {
         // Deleting a bound buffer unbinds it.
         for i in 0..n.max(0) as usize {
-            if buffers.add(i).read_unaligned() == self.array_buffer {
+            let buffer = buffers.add(i).read_unaligned();
+            if buffer == self.array_buffer {
                 self.array_buffer = 0;
+            }
+            if buffer == self.element_array_buffer {
+                self.element_array_buffer = 0;
+            }
+            if let Some(copies) = INDEX_BUFFER_COPIES.lock().unwrap().as_mut() {
+                copies.remove(&buffer);
             }
         }
         gl::DeleteBuffers(n, buffers);
@@ -1291,6 +1410,8 @@ impl GLES for GLES1OnGLES2 {
     unsafe fn BindBuffer(&mut self, target: GLenum, buffer: GLuint) {
         if target == gles11::ARRAY_BUFFER {
             self.array_buffer = buffer;
+        } else if target == gles11::ELEMENT_ARRAY_BUFFER {
+            self.element_array_buffer = buffer;
         }
         gl::BindBuffer(target, buffer);
     }
@@ -1301,6 +1422,22 @@ impl GLES for GLES1OnGLES2 {
         data: *const GLvoid,
         usage: GLenum,
     ) {
+        if cfg!(target_os = "emscripten")
+            && target == gles11::ELEMENT_ARRAY_BUFFER
+            && self.element_array_buffer != 0
+        {
+            let size = size.max(0) as usize;
+            let copy = if data.is_null() {
+                vec![0u8; size]
+            } else {
+                std::slice::from_raw_parts(data.cast::<u8>(), size).to_vec()
+            };
+            INDEX_BUFFER_COPIES
+                .lock()
+                .unwrap()
+                .get_or_insert_with(HashMap::new)
+                .insert(self.element_array_buffer, copy);
+        }
         gl::BufferData(target, size, data, usage);
     }
     unsafe fn BufferSubData(
@@ -1310,6 +1447,23 @@ impl GLES for GLES1OnGLES2 {
         size: GLsizeiptr,
         data: *const GLvoid,
     ) {
+        if cfg!(target_os = "emscripten")
+            && target == gles11::ELEMENT_ARRAY_BUFFER
+            && self.element_array_buffer != 0
+            && !data.is_null()
+        {
+            if let Some(copy) = INDEX_BUFFER_COPIES
+                .lock()
+                .unwrap()
+                .as_mut()
+                .and_then(|copies| copies.get_mut(&self.element_array_buffer))
+            {
+                let (offset, size) = (offset.max(0) as usize, size.max(0) as usize);
+                if let Some(range) = copy.get_mut(offset..offset + size) {
+                    range.copy_from_slice(std::slice::from_raw_parts(data.cast::<u8>(), size));
+                }
+            }
+        }
         gl::BufferSubData(target, offset, size, data);
     }
 
@@ -1444,6 +1598,9 @@ impl GLES for GLES1OnGLES2 {
         type_: GLenum,
         indices: *const GLvoid,
     ) {
+        if cfg!(target_os = "emscripten") && self.draw_elements_unindexed(mode, count, type_, indices) {
+            return;
+        }
         if self.prepare_draw() {
             gl::DrawElements(mode, count, type_, indices);
         }
