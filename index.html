@@ -18,18 +18,30 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
   :root {
-    --bg: #14161a; --panel: #1e2127; --text: #e6e8ec; --muted: #9aa1ad;
-    --accent: #6cb2ff; --border: #2c313a;
+    --bg: #0e0f12; --glow: rgba(110, 160, 255, 0.10);
+    --surface: #18191e; --surface-2: #212329; --text: #f2f3f5; --muted: #8e94a0; --faint: #50555f;
+    --accent: #7db4ff; --accent-strong: #3d8bfd; --border: rgba(255, 255, 255, 0.07);
+    --shadow: 0 10px 30px rgba(0, 0, 0, 0.45); --icon-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+    --good: #46c28a; --partly: #e2b14a; --danger: #ff6b62;
+    color-scheme: dark;
   }
   @media (prefers-color-scheme: light) {
     :root:not([data-theme="dark"]) {
-      --bg: #f4f5f7; --panel: #ffffff; --text: #1b1e24; --muted: #5d6573;
-      --accent: #0b63ce; --border: #d5d9e0;
+      --bg: #f3f4f7; --glow: rgba(61, 139, 253, 0.10);
+      --surface: #ffffff; --surface-2: #eceef2; --text: #15171c; --muted: #6a707b; --faint: #b3b8c1;
+      --accent: #0b63ce; --accent-strong: #0b63ce; --border: rgba(10, 20, 40, 0.08);
+      --shadow: 0 10px 30px rgba(20, 30, 50, 0.14); --icon-shadow: 0 6px 14px rgba(20, 30, 50, 0.18);
+      --good: #1d9a61; --partly: #b7791f; --danger: #d93a31;
+      color-scheme: light;
     }
   }
   :root[data-theme="light"] {
-    --bg: #f4f5f7; --panel: #ffffff; --text: #1b1e24; --muted: #5d6573;
-    --accent: #0b63ce; --border: #d5d9e0;
+    --bg: #f3f4f7; --glow: rgba(61, 139, 253, 0.10);
+    --surface: #ffffff; --surface-2: #eceef2; --text: #15171c; --muted: #6a707b; --faint: #b3b8c1;
+    --accent: #0b63ce; --accent-strong: #0b63ce; --border: rgba(10, 20, 40, 0.08);
+    --shadow: 0 10px 30px rgba(20, 30, 50, 0.14); --icon-shadow: 0 6px 14px rgba(20, 30, 50, 0.18);
+    --good: #1d9a61; --partly: #b7791f; --danger: #d93a31;
+    color-scheme: light;
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
@@ -37,73 +49,153 @@
      inside itself if there are more games than fit. */
   html, body { max-width: 100%; height: 100%; overflow: hidden; overscroll-behavior: none; }
   body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    margin: 0; color: var(--text);
+    background: radial-gradient(900px 420px at 50% -160px, var(--glow), transparent 70%), var(--bg);
+    font: 15px/1.45 system-ui, -apple-system, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent;
   }
-  button { font: inherit; }
+  button { font: inherit; color: inherit; }
   button.small {
-    padding: 6px 12px; border-radius: 6px; cursor: pointer;
-    background: transparent; color: var(--accent); border: 1px solid var(--accent);
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    height: 32px; padding: 0 14px; border-radius: 999px; cursor: pointer;
+    background: var(--surface); color: var(--text); border: 1px solid var(--border);
+    font-size: 13px; font-weight: 550; transition: background 0.15s;
   }
+  button.small:hover { background: var(--surface-2); }
+  button.small:disabled { opacity: 0.45; cursor: default; }
   button.primary {
-    padding: 9px 16px; border: 0; border-radius: 6px; cursor: pointer;
-    background: var(--accent); color: #fff; font-weight: 600;
+    height: 46px; padding: 0 18px; border: 0; border-radius: 13px; cursor: pointer;
+    background: var(--accent-strong); color: #fff; font-weight: 600; font-size: 16px;
   }
+  button.link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font-size: inherit; }
   .panel {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-    padding: 12px 14px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+    padding: 16px; box-shadow: var(--shadow);
   }
 
   /* The hub: the start screen, listing the games kept on this device. */
   #hub {
-    position: fixed; inset: 0; max-width: 860px; margin: 0 auto;
+    position: fixed; inset: 0; max-width: 760px; margin: 0 auto;
     overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
-    padding: max(20px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
-      max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
-    display: flex; flex-direction: column; gap: 16px;
+    padding: max(22px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right))
+      max(16px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+    display: flex; flex-direction: column; gap: 24px;
   }
-  #hub header { display: flex; align-items: flex-start; gap: 12px; }
+  #hub header { display: flex; align-items: center; gap: 12px; }
+  #hub header .logo {
+    width: 42px; height: 42px; border-radius: 11px; flex: none; box-shadow: var(--icon-shadow);
+  }
   #hub header .grow { flex: 1; min-width: 0; }
-  #hub header h1 { font-size: 22px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
-  #hub header p { margin: 2px 0 0; color: var(--muted); }
-  #hub h2 {
-    font-size: 12px; font-weight: 600; margin: 0; color: var(--muted);
-    text-transform: uppercase; letter-spacing: 0.06em;
+  #hub header h1 { font-size: 19px; margin: 0; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; }
+  #hub header p { margin: 1px 0 0; color: var(--muted); font-size: 13px; }
+  #hub header .buttons { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  #hub h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; margin: 6px 0 -6px; }
+
+  #library {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 22px 8px;
   }
-  #library { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(132px, 42vw), 1fr)); gap: 12px; }
   .tile {
-    position: relative; display: flex; flex-direction: column; align-items: center; gap: 10px;
-    padding: 16px 10px 12px; border-radius: 12px; cursor: pointer; text-align: center;
-    background: var(--panel); border: 1px solid var(--border); color: var(--text);
-    min-height: 148px;
+    position: relative; display: flex; flex-direction: column; align-items: center; gap: 7px;
+    padding: 4px 2px; border-radius: 14px; cursor: pointer; text-align: center;
+    background: none; border: 0; color: var(--text); outline: none;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
   }
-  .tile:hover, .tile:focus-visible { border-color: var(--accent); outline: none; }
   .tile .icon {
-    width: 72px; height: 72px; border-radius: 16px; flex: none;
+    width: 72px; height: 72px; border-radius: 17px; flex: none; overflow: hidden;
     display: flex; align-items: center; justify-content: center;
-    color: #fff; font-size: 26px; font-weight: 700; letter-spacing: 0.02em;
+    color: #fff; font-size: 24px; font-weight: 700; letter-spacing: 0.01em;
+    box-shadow: var(--icon-shadow); transition: transform 0.18s ease, box-shadow 0.18s ease;
   }
-  .tile .icon { overflow: hidden; }
   .tile .icon img { width: 100%; height: 100%; display: block; object-fit: cover; }
-  .tile .name { font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
-  .tile.add { border-style: dashed; color: var(--muted); justify-content: center; }
-  .tile.add .icon { background: transparent; border: 2px dashed var(--border); color: var(--muted); font-weight: 400; font-size: 34px; }
+  .tile:hover .icon { transform: translateY(-2px); }
+  .tile:active .icon { transform: scale(0.96); }
+  .tile:focus-visible .icon { box-shadow: 0 0 0 3px var(--accent), var(--icon-shadow); }
+  .tile .name {
+    font-size: 13px; font-weight: 600; line-height: 1.25; max-width: 100%;
+    overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  }
+  .compat { font-size: 11px; font-weight: 500; color: var(--muted); }
+  .compat::before {
+    content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    margin-right: 5px; vertical-align: 1px; background: var(--faint);
+  }
+  .compat.good::before { background: var(--good); }
+  .compat.partly::before { background: var(--partly); }
+  .tile .compat { margin-top: -3px; }
   .tile .more {
-    position: absolute; top: 4px; right: 4px; width: 28px; height: 28px; border-radius: 14px;
-    border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 18px; line-height: 1;
+    position: absolute; top: -6px; left: calc(50% + 24px); width: 26px; height: 26px; border-radius: 13px;
+    border: 1px solid var(--border); background: var(--surface); color: var(--muted); cursor: pointer;
+    font-size: 15px; line-height: 1; padding: 0 0 2px; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
   }
-  .tile .more:hover { background: var(--border); color: var(--text); }
+  .tile .more:hover { color: var(--text); background: var(--surface-2); }
+  .tile.add { color: var(--muted); }
+  .tile.add .icon {
+    background: transparent; border: 1.5px dashed var(--faint); box-shadow: none;
+    color: var(--muted); font-weight: 300; font-size: 32px;
+  }
+  .tile.add .name { color: var(--muted); font-weight: 500; }
+  .tile.dragging { z-index: 5; pointer-events: none; }
+  .tile.dragging .icon { transform: scale(1.1); box-shadow: 0 16px 34px rgba(0, 0, 0, 0.4); }
   input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
-  #status { color: var(--muted); min-height: 1.45em; }
+  #status { color: var(--muted); font-size: 13px; min-height: 1.45em; margin-top: -8px; }
   #hub .spacer { flex: 1; }
+
+  #whats-new { padding: 16px 18px; }
+  #whats-new .row { display: flex; align-items: center; gap: 10px; }
+  #whats-new .row strong { font-size: 15px; }
+  #whats-new .row .grow { flex: 1; color: var(--muted); font-size: 12px; }
+  #whats-new ul { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 14px; }
+  #whats-new li + li { margin-top: 4px; }
+
+  #log-panel { background: none; border: 0; border-top: 1px solid var(--border); border-radius: 0; box-shadow: none; padding: 12px 0 0; }
+  #theme { width: 32px; padding: 0; font-size: 15px; }
   #log-head { display: flex; align-items: center; gap: 10px; }
-  #log-head .grow { flex: 1; color: var(--muted); font-size: 13px; }
-  #log-toggle { background: none; border: 0; padding: 0; color: var(--text); cursor: pointer; font-weight: 600; }
+  #log-head .grow { flex: 1; color: var(--faint); font-size: 12px; }
+  #log-toggle { background: none; border: 0; padding: 0; color: var(--muted); cursor: pointer; font-size: 13px; font-weight: 600; }
   #log {
-    margin: 10px 0 0; max-height: 260px; overflow: auto; white-space: pre-wrap;
-    word-break: break-word; font: 12px/1.4 ui-monospace, Consolas, monospace;
+    margin: 10px 0 0; max-height: 240px; overflow: auto; white-space: pre-wrap;
+    word-break: break-word; font: 11.5px/1.45 ui-monospace, "SF Mono", Consolas, monospace;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px;
   }
-  #hub footer { color: var(--muted); font-size: 13px; }
+  #hub footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: -10px; }
+  #hub footer p { margin: 2px 0; }
+
+  /* Details of a game: a sheet from the bottom on phones, a card elsewhere. */
+  .overlay {
+    position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.45);
+    -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+    display: flex; align-items: center; justify-content: center; padding: 16px;
+  }
+  .sheet {
+    width: 100%; max-width: 380px; max-height: 100%; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 10px; padding: 20px; border-radius: 22px;
+  }
+  @media (max-width: 520px) {
+    .overlay { align-items: flex-end; padding: 0; }
+    .sheet {
+      max-width: none; border-radius: 22px 22px 0 0; border-bottom: 0;
+      padding-bottom: max(20px, env(safe-area-inset-bottom));
+    }
+  }
+  .sheet button { width: 100%; }
+  .sheet button.small { height: 44px; border-radius: 13px; background: var(--surface-2); border: 0; font-size: 15px; }
+  .sheet button.small:hover { filter: brightness(1.06); }
+  .sheet button.danger { color: var(--danger); }
+  #info-close { background: none !important; color: var(--muted); height: 36px !important; }
+  .info-head { display: flex; gap: 14px; align-items: center; margin-bottom: 4px; }
+  .info-head .icon {
+    width: 64px; height: 64px; border-radius: 15px; overflow: hidden; flex: none; box-shadow: var(--icon-shadow);
+    display: flex; align-items: center; justify-content: center; color: #fff; font-size: 22px; font-weight: 700;
+  }
+  .info-head .icon img { width: 100%; height: 100%; display: block; }
+  .info-head h3 { margin: 0 0 3px; font-size: 19px; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+  .info-head .compat { font-size: 12px; line-height: 1.4; }
+  #info-details {
+    margin: 0 0 6px; display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13px;
+    background: var(--surface-2); border-radius: 13px; padding: 12px 14px;
+  }
+  #info-details dt { color: var(--muted); }
+  #info-details dd { margin: 0; overflow-wrap: anywhere; }
 
   /* The game: nothing but the screen, as large as fits. This is done with
      the page's layout rather than by putting the canvas itself into
@@ -126,68 +218,41 @@
     -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
   }
   #game-menu-button {
-    position: fixed; top: max(6px, env(safe-area-inset-top)); right: max(6px, env(safe-area-inset-right));
+    position: fixed; top: max(8px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right));
     z-index: 3; width: 34px; height: 34px; border-radius: 17px; border: 0; cursor: pointer;
-    background: rgba(255, 255, 255, 0.16); color: #fff; font-size: 18px; line-height: 1;
+    background: rgba(255, 255, 255, 0.14); color: #fff; font-size: 18px; line-height: 1;
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
   }
   #game-menu {
-    position: fixed; inset: 0; z-index: 4; background: rgba(0, 0, 0, 0.6);
+    position: fixed; inset: 0; z-index: 4; background: rgba(0, 0, 0, 0.55);
+    -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
     display: flex; align-items: center; justify-content: center; padding: 16px;
   }
-  #game-menu .panel { width: 100%; max-width: 320px; display: flex; flex-direction: column; gap: 10px; }
-  #game-menu p { margin: 0; color: var(--muted); }
-  #game-menu button { width: 100%; padding: 10px 14px; }
+  #game-menu .panel { width: 100%; max-width: 320px; display: flex; flex-direction: column; gap: 10px; border-radius: 20px; }
+  #game-menu p { margin: 0 0 4px; color: var(--muted); font-size: 14px; }
+  #game-menu button { width: 100%; }
+  #game-menu button.small { height: 44px; border-radius: 13px; background: var(--surface-2); border: 0; font-size: 15px; }
   #text-panel {
     position: fixed; top: max(8px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
-    z-index: 2; width: 100%; max-width: min(640px, calc(100vw - 96px));
+    z-index: 2; width: 100%; max-width: min(640px, calc(100vw - 96px)); padding: 12px 14px;
   }
-  #text-panel label { display: block; color: var(--muted); margin-bottom: 6px; }
+  #text-panel label { display: block; color: var(--muted); margin-bottom: 6px; font-size: 13px; }
   #text-entry {
-    width: 100%; padding: 9px 10px; font: inherit; color: var(--text);
-    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    width: 100%; padding: 10px 12px; font: inherit; color: var(--text);
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px;
   }
-  #hub header .buttons { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-  .tile { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-  .tile.dragging {
-    z-index: 5; pointer-events: none; border-color: var(--accent);
-    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
-  }
-  .compat { font-size: 12px; font-weight: 600; }
-  .compat.good { color: #3fb950; }
-  .compat.partly { color: #d29922; }
-  .compat.untested { color: var(--muted); }
-  button.link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font-size: inherit; }
-  button.danger { color: #e5534b; border-color: #e5534b; }
-  #whats-new .row { display: flex; align-items: center; gap: 10px; }
-  #whats-new .row .grow { flex: 1; color: var(--muted); font-size: 13px; }
-  #whats-new ul { margin: 8px 0 0; padding-left: 20px; }
-  .overlay {
-    position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.55);
-    display: flex; align-items: center; justify-content: center; padding: 16px;
-  }
-  .sheet { width: 100%; max-width: 360px; max-height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
-  .sheet button { width: 100%; padding: 10px 14px; }
-  .info-head { display: flex; gap: 12px; align-items: center; }
-  .info-head .icon {
-    width: 60px; height: 60px; border-radius: 14px; overflow: hidden; flex: none;
-    display: flex; align-items: center; justify-content: center; color: #fff; font-size: 22px; font-weight: 700;
-  }
-  .info-head .icon img { width: 100%; height: 100%; display: block; }
-  .info-head h3 { margin: 0 0 2px; font-size: 18px; overflow-wrap: anywhere; }
-  #info-details { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 14px; }
-  #info-details dt { color: var(--muted); }
-  #info-details dd { margin: 0; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
   <main id="hub">
     <header>
+      <img class="logo" src="icon-192.png" alt="">
       <div class="grow">
         <h1>pocket-hle</h1>
-        <p>Old iPhone games, running in your browser.</p>
+        <p>Your old iPhone games.</p>
       </div>
       <div class="buttons">
-        <button class="small" id="theme" type="button" aria-label="Theme">◐ Auto</button>
+        <button class="small" id="theme" type="button" aria-label="Theme">◐</button>
         <button class="small" id="update" type="button">Update</button>
       </div>
     </header>
@@ -201,11 +266,11 @@
       <ul id="whats-new-list"></ul>
     </div>
 
-    <h2>Your games</h2>
+    <h2>Library</h2>
     <div id="library">
       <label class="tile add" id="add-tile" tabindex="0">
         <span class="icon">+</span>
-        <span class="name">Add a game</span>
+        <span class="name">Add game</span>
         <input type="file" id="pick" accept=".ipa,application/octet-stream">
       </label>
     </div>
@@ -221,9 +286,10 @@
       </div>
       <pre id="log" hidden></pre>
     </div>
-    <footer>Games are app files (.ipa) that you add yourself. They and your saved progress stay in this browser on this device; nothing is uploaded.<br>
-      <span id="version"></span> · <button class="link" id="show-whats-new" type="button">What's new</button>
-      · Hold a game to drag it elsewhere.</footer>
+    <footer>
+      <p>Games are app files (.ipa) you add yourself. They and your progress stay on this device; nothing is uploaded.</p>
+      <p><span id="version"></span> · <button class="link" id="show-whats-new" type="button">What's new</button> · Hold a game to rearrange</p>
+    </footer>
   </main>
 
   <!-- Details of a game, opened with its ⋯ button. -->
@@ -1095,8 +1161,9 @@ async function resetProgress(bundleId) {
 }
 
 // Version and what changed in it, shown once after each update.
-const VERSION = '2026.11.15';
+const VERSION = '2026.11.15.2';
 const WHATS_NEW = [
+  'A cleaner, calmer look for the hub.',
   'Tap ⋯ on a game for its details, to rename it, reset its progress or remove it.',
   'Games show their real names, and whether they are known to work.',
   'Hold a game for a moment, then drag it to rearrange.',
@@ -1124,7 +1191,7 @@ document.getElementById('show-whats-new').addEventListener('click', () => { what
 
 // Theme: follow the device, or always light or dark.
 const THEME_KEY = 'pocket-hle-theme';
-const THEMES = { auto: '◐ Auto', light: '☀ Light', dark: '☾ Dark' };
+const THEMES = { auto: '◐', light: '☀', dark: '☾' };
 const themeButton = document.getElementById('theme');
 let theme = 'auto';
 try { theme = localStorage.getItem(THEME_KEY) || 'auto'; } catch (e) { /* no storage */ }
@@ -1134,6 +1201,7 @@ function applyTheme() {
   else document.documentElement.dataset.theme = theme;
   themeButton.textContent = THEMES[theme];
   themeButton.setAttribute('aria-label', 'Theme: ' + theme);
+  themeButton.title = 'Theme: ' + theme;
 }
 applyTheme();
 themeButton.addEventListener('click', () => {
