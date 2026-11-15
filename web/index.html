@@ -522,13 +522,25 @@ document.getElementById('menu-fullscreen').addEventListener('click', () => {
   gameMenu.hidden = true;
   Module.canvas.focus();
 });
-document.getElementById('menu-leave').addEventListener('click', async () => {
+// Leaving closes the game properly first, so that games which only save
+// when they are closed (like Snail Mail) do. If the game doesn't close within
+// a few seconds (or has already stopped), the page goes back anyway.
+let leaving = false;
+async function backToHub() {
   keepLog();
   await storeSavesNow();
   if (document.fullscreenElement || document.webkitFullscreenElement) {
     try { await (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (e) { /* fine */ }
   }
   location.reload();
+}
+document.getElementById('menu-leave').addEventListener('click', () => {
+  if (leaving) return;
+  leaving = true;
+  gameMenu.hidden = true;
+  if (stoppedMessage) { backToHub(); return; }
+  pageHidden = true;
+  setTimeout(backToHub, 5000);
 });
 
 let stoppedMessage = '';
@@ -668,13 +680,17 @@ var Module = {
   canvas: document.getElementById('canvas'),
   print: log,
   printErr: log,
-  onExit: (code) => {
-    storeSavesNow();
+  onExit: async (code) => {
+    if (leaving) { backToHub(); return; }
     if (closedForBackground) {
       keepLog();
+      // The reload has to wait until the saves are stored.
+      await storeSavesNow();
+      savesStoredAfterClose = true;
       if (!document.hidden) location.reload();
       return;
     }
+    storeSavesNow();
     gameStopped('The game has exited (code ' + code + ').');
   },
   // Text input: see the web_text_input module in src/window.rs.
@@ -737,13 +753,14 @@ Module.pocketHleMotion = () => motion || '';
 const RESUME_KEY = 'pocket-hle-resume';
 let pageHidden = false;
 let closedForBackground = false;
+let savesStoredAfterClose = false;
 function onPageHidden() {
   if (started && !stoppedMessage) pageHidden = true;
 }
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     onPageHidden();
-  } else if (closedForBackground) {
+  } else if (closedForBackground && savesStoredAfterClose) {
     location.reload();
   }
 });
@@ -751,6 +768,7 @@ window.addEventListener('pagehide', onPageHidden);
 Module.pocketHleTakePageHidden = () => {
   if (!pageHidden) return '';
   pageHidden = false;
+  if (leaving) return '1';
   closedForBackground = true;
   try { if (currentApp) sessionStorage.setItem(RESUME_KEY, currentApp.key); } catch (e) { /* no storage */ }
   return '1';
