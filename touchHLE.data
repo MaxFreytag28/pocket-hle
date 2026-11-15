@@ -198,7 +198,7 @@ com.gameloft.HOS2: --stick-to-touch=28,206,84,84 --button-to-touch=Start,25,25 -
 com.sandlotgames.snailmail: --landscape-left
 
 # Snail Mail
-com.sandlotgames.iSM: --landscape-left
+com.sandlotgames.iSM: --landscape-left --scale-hack=3
 		    GNU GENERAL PUBLIC LICENSE
 		       Version 2, June 1991
 
