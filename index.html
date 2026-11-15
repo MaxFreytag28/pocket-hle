@@ -1,0 +1,377 @@
+<!doctype html>
+<!--
+  This Source Code Form is subject to the terms of the Mozilla Public
+  License, v. 2.0. If a copy of the MPL was not distributed with this
+  file, You can obtain one at https://mozilla.org/MPL/2.0/.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>pocket-hle</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#14161a">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+  :root {
+    --bg: #14161a; --panel: #1e2127; --text: #e6e8ec; --muted: #9aa1ad;
+    --accent: #6cb2ff; --border: #2c313a;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f4f5f7; --panel: #ffffff; --text: #1b1e24; --muted: #5d6573;
+      --accent: #0b63ce; --border: #d5d9e0;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column; align-items: center; gap: 12px;
+  }
+  h1 { font-size: 18px; margin: 4px 0 0; font-weight: 600; }
+  p { margin: 0; color: var(--muted); max-width: 60ch; text-align: center; }
+  /* The id must be "canvas": that is where Emscripten's SDL2 looks for the
+     element to attach its mouse, touch and keyboard listeners to. */
+  #canvas {
+    background: #000; border: 1px solid var(--border); border-radius: 6px;
+    /* Fill the width that is available, up to twice the size of the original
+       screen, and never taller than the window. */
+    width: min(100%, 960px, calc((100vh - 24px) * 1.5)); height: auto; aspect-ratio: 3 / 2;
+    image-rendering: pixelated; touch-action: none;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  }
+  button.pick {
+    padding: 9px 16px; border: 0; border-radius: 6px; cursor: pointer; margin-right: 8px;
+    background: var(--accent); color: #fff; font: inherit; font-weight: 600;
+  }
+  label.pick.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px; width: 100%; max-width: 640px;
+  }
+  label.pick {
+    display: inline-block; padding: 9px 16px; border-radius: 6px; cursor: pointer;
+    background: var(--accent); color: #fff; font-weight: 600;
+  }
+  label.pick[aria-disabled="true"] { opacity: .5; cursor: default; }
+  input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  #status { color: var(--muted); margin-top: 8px; }
+  #text-panel label { display: block; color: var(--muted); margin-bottom: 6px; }
+  #text-entry {
+    width: 100%; padding: 9px 10px; font: inherit; color: var(--text);
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  }
+  details summary { cursor: pointer; color: var(--muted); }
+  #log {
+    margin: 8px 0 0; max-height: 260px; overflow: auto; white-space: pre-wrap;
+    word-break: break-word; font: 12px/1.4 ui-monospace, Consolas, monospace;
+  }
+</style>
+</head>
+<body>
+  <h1>pocket-hle</h1>
+  <p>Runs old iPhone OS apps in the browser. Choose an app file (.ipa) that you own; it stays on this device and is not uploaded anywhere.</p>
+
+  <canvas id="canvas" width="480" height="320" tabindex="0"></canvas>
+
+  <!-- Shown while the app wants text. A real text field is what makes a
+       phone show its keyboard. -->
+  <div class="panel" id="text-panel" hidden>
+    <label for="text-entry">The app is asking for text. Type here:</label>
+    <input type="text" id="text-entry" autocomplete="off" autocorrect="off" autocapitalize="off"
+           spellcheck="false" enterkeyhint="done">
+  </div>
+
+  <div class="panel">
+    <button class="pick" id="play-again" hidden></button>
+    <label class="pick" id="pick-label" aria-disabled="true">
+      <span id="pick-text">Choose app file</span>
+      <input type="file" id="pick" accept=".ipa,application/octet-stream" disabled>
+    </label>
+    <div id="status">Loading the emulator…</div>
+  </div>
+
+  <details class="panel" id="log-panel">
+    <summary>Log</summary>
+    <pre id="log"></pre>
+  </details>
+
+<script>
+'use strict';
+const statusEl = document.getElementById('status');
+const logEl = document.getElementById('log');
+const pickEl = document.getElementById('pick');
+const pickLabel = document.getElementById('pick-label');
+const playAgainEl = document.getElementById('play-again');
+
+// Everything the emulator prints, most recent last. Kept on `window` so it
+// can be inspected from the developer console.
+const logLines = window.pocketHleLog = [];
+function log(line) {
+  logLines.push(line);
+  if (logLines.length > 4000) logLines.splice(0, 1000);
+  // Updating the DOM for every line is slow, so batch it.
+  if (!log.pending) {
+    log.pending = true;
+    requestAnimationFrame(() => {
+      log.pending = false;
+      logEl.textContent = logLines.slice(-400).join('\n');
+      logEl.scrollTop = logEl.scrollHeight;
+    });
+  }
+}
+function setStatus(text) { statusEl.textContent = text; }
+
+window.addEventListener('error', (e) => {
+  log('[page error] ' + (e.message || e));
+  setStatus('Something went wrong. See the log below.');
+});
+window.addEventListener('unhandledrejection', (e) => {
+  log('[page error] ' + (e.reason && e.reason.stack || e.reason));
+  setStatus('Something went wrong. See the log below.');
+});
+
+const params = new URLSearchParams(location.search);
+
+// What has been typed into the text field and not yet collected by the
+// emulator. Backspace is U+0008 and Return is a newline.
+const textPanel = document.getElementById('text-panel');
+const textEntry = document.getElementById('text-entry');
+let pendingText = '';
+textEntry.addEventListener('beforeinput', (e) => {
+  if (e.inputType === 'deleteContentBackward') pendingText += '\b';
+  else if (e.inputType === 'insertLineBreak') pendingText += '\n';
+  else if (e.data) pendingText += e.data;
+});
+textEntry.addEventListener('keydown', (e) => {
+  // Backspace in an empty field and Return don't always produce an input
+  // event, so handle the keys themselves.
+  if (e.key === 'Enter') { pendingText += '\n'; e.preventDefault(); }
+  else if (e.key === 'Backspace' && textEntry.value === '') pendingText += '\b';
+});
+// Keep the emulator from also seeing these keys as its own keyboard input.
+for (const type of ['keydown', 'keypress', 'keyup']) {
+  textEntry.addEventListener(type, (e) => e.stopPropagation());
+}
+
+// For development: with ?debug in the address, the last frame drawn stays
+// readable (canvas.toDataURL() etc), at some cost in speed.
+if (params.has('debug')) {
+  const getContext = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function (type, attributes) {
+    return getContext.call(this, type, Object.assign({}, attributes, { preserveDrawingBuffer: true }));
+  };
+  // Keep track of the audio outputs the emulator opens, so their state can be
+  // inspected (window.pocketHleAudio).
+  window.pocketHleAudio = [];
+  for (const name of ['AudioContext', 'webkitAudioContext']) {
+    const Original = window[name];
+    if (!Original) continue;
+    window[name] = class extends Original {
+      constructor(...args) { super(...args); window.pocketHleAudio.push(this); }
+    };
+  }
+  // Send the current frame to the development server (dev-scripts/web-serve.py),
+  // which saves it as <name>.png.
+  window.pocketHleShot = async (name) => {
+    const canvas = document.getElementById('canvas');
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    const response = await fetch('/__shot?name=' + encodeURIComponent(name), { method: 'POST', body: blob });
+    return response.status;
+  };
+  // Tap the screen at a position given as fractions of its width and height.
+  window.pocketHleTap = async (fx, fy, holdMs = 200) => {
+    const canvas = document.getElementById('canvas');
+    const rect = canvas.getBoundingClientRect();
+    const options = {
+      clientX: rect.left + rect.width * fx, clientY: rect.top + rect.height * fy,
+      button: 0, buttons: 1, bubbles: true, cancelable: true, view: window,
+    };
+    canvas.dispatchEvent(new MouseEvent('mousemove', options));
+    canvas.dispatchEvent(new MouseEvent('mousedown', options));
+    await new Promise((resolve) => setTimeout(resolve, holdMs));
+    canvas.dispatchEvent(new MouseEvent('mouseup', Object.assign({}, options, { buttons: 0 })));
+  };
+}
+
+var Module = {
+  canvas: document.getElementById('canvas'),
+  print: log,
+  printErr: log,
+  onExit: (code) => {
+    setStatus('The app has exited (code ' + code + ').');
+  },
+  // Text input: see the web_text_input module in src/window.rs.
+  pocketHleTextInput: (active) => {
+    textPanel.hidden = !active;
+    if (active) {
+      textEntry.value = '';
+      // On phones this only brings up the keyboard if the browser still
+      // considers us to be handling the user's tap. If it doesn't, the user
+      // taps the field, which is why it is visible.
+      textEntry.focus();
+    } else {
+      textEntry.blur();
+      Module.canvas.focus();
+    }
+  },
+  pocketHleTakeText: () => {
+    const text = pendingText;
+    pendingText = '';
+    return text;
+  },
+  setStatus: (text) => { if (text) setStatus(text); },
+  onRuntimeInitialized: async () => {
+    pickEl.disabled = false;
+    pickLabel.setAttribute('aria-disabled', 'false');
+    setStatus('Ready. Choose an app file to start.');
+    if (params.has('autoload')) { maybeAutoload(); return; }
+    // Offer the app file that was used last time, if there is one.
+    const remembered = await recallApp();
+    if (remembered && !started) {
+      playAgainEl.textContent = 'Play ' + remembered.name.replace(/\.ipa$/i, '');
+      playAgainEl.hidden = false;
+      playAgainEl.onclick = async () => {
+        start(new Uint8Array(await remembered.bytes.arrayBuffer()), remembered.name);
+      };
+      pickLabel.classList.add('secondary');
+      document.getElementById('pick-text').textContent = 'Choose a different file';
+      setStatus('Ready.');
+    }
+  },
+  onAbort: (what) => {
+    log('[aborted] ' + what);
+    setStatus('The emulator stopped. See the log below.');
+    document.getElementById('log-panel').open = true;
+  },
+};
+
+// Saved data. touchHLE keeps each app's files (its "sandbox") in this folder.
+// Here it is backed by IndexedDB, so that it survives closing the page. It
+// stays in this browser on this device.
+const SAVES_DIR = '/touchHLE_sandbox';
+let savesMounted = false;
+let savesSyncing = false;
+function loadSaves() {
+  return new Promise((resolve) => {
+    try { Module.FS.mkdir(SAVES_DIR); } catch (e) { /* already exists */ }
+    try {
+      Module.FS.mount(Module.IDBFS, {}, SAVES_DIR);
+    } catch (e) {
+      log('[saves] Saved data will not be kept: ' + e);
+      resolve();
+      return;
+    }
+    Module.FS.syncfs(true, (error) => {
+      if (error) log('[saves] Could not load saved data: ' + error);
+      savesMounted = !error;
+      resolve();
+    });
+  });
+}
+// Write anything that changed to IndexedDB. This is cheap when nothing did.
+function storeSaves() {
+  if (!savesMounted || savesSyncing) return;
+  savesSyncing = true;
+  Module.FS.syncfs(false, (error) => {
+    savesSyncing = false;
+    if (error) log('[saves] Could not store saved data: ' + error);
+  });
+}
+setInterval(storeSaves, 3000);
+// Phones may discard a page in the background without warning, so this is
+// the last reliable moment to save.
+document.addEventListener('visibilitychange', () => { if (document.hidden) storeSaves(); });
+window.addEventListener('pagehide', storeSaves);
+
+// The app file chosen last time is kept in this browser (in IndexedDB, on
+// this device) so that it doesn't have to be chosen again on every visit.
+function openAppStore() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('pocket-hle-apps', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('apps');
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+async function rememberApp(name, bytes) {
+  try {
+    const db = await openAppStore();
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction('apps', 'readwrite');
+      transaction.objectStore('apps').put({ name, bytes: new Blob([bytes]) }, 'last');
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    });
+  } catch (e) {
+    log('[apps] The app file could not be kept for next time: ' + e);
+  }
+}
+async function recallApp() {
+  try {
+    const db = await openAppStore();
+    return await new Promise((resolve, reject) => {
+      const request = db.transaction('apps').objectStore('apps').get('last');
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
+    });
+  } catch (e) {
+    return null;
+  }
+}
+
+let started = false;
+async function start(bytes, name) {
+  if (started) return;
+  started = true;
+  pickEl.disabled = true;
+  pickLabel.setAttribute('aria-disabled', 'true');
+  playAgainEl.hidden = true;
+  setStatus('Starting ' + name + '…');
+  await loadSaves();
+  Module.FS.writeFile('/app.ipa', bytes);
+  Module.canvas.focus();
+  try {
+    // This returns as soon as the emulator first pauses to let the browser
+    // do its work, not when the app exits (see Module.onExit for that).
+    Module.callMain(['/app.ipa']);
+    setStatus('Running ' + name + '.');
+  } catch (e) {
+    log('[exited] ' + (e && e.stack || e));
+    setStatus('The emulator stopped. See the log below.');
+    document.getElementById('log-panel').open = true;
+  }
+}
+
+pickEl.addEventListener('change', async () => {
+  const file = pickEl.files[0];
+  if (!file) return;
+  setStatus('Reading ' + file.name + '…');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  rememberApp(file.name, bytes);
+  start(bytes, file.name);
+});
+
+// Offline support and installation to the home screen. Service workers need
+// a secure origin (https, or localhost during development).
+if ('serviceWorker' in navigator && !params.has('debug')) {
+  navigator.serviceWorker.register('sw.js').catch((e) => log('[offline] ' + e));
+}
+
+// For development: with ?autoload in the address, an app file placed next to
+// this page as test-app.ipa is started without asking.
+async function maybeAutoload() {
+  if (!params.has('autoload')) return;
+  const response = await fetch('test-app.ipa');
+  if (!response.ok) { setStatus('Autoload: test-app.ipa not found.'); return; }
+  start(new Uint8Array(await response.arrayBuffer()), 'test-app.ipa');
+}
+</script>
+<script async src="touchHLE.js"></script>
+</body>
+</html>
