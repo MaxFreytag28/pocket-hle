@@ -61,6 +61,31 @@
   label.pick[aria-disabled="true"] { opacity: .5; cursor: default; }
   input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
   #status { color: var(--muted); margin-top: 8px; }
+  button.small {
+    padding: 6px 12px; border-radius: 6px; cursor: pointer; font: inherit;
+    background: transparent; color: var(--accent); border: 1px solid var(--accent);
+  }
+  #copy-log { margin-top: 8px; }
+
+  /* Fullscreen mode: nothing but the screen, as large as fits. This is done
+     with styles rather than by putting the canvas itself into fullscreen,
+     so that it also works where the Fullscreen API isn't available (iPhone). */
+  #exit-fullscreen { display: none; }
+  body.fullscreen { padding: 0; gap: 0; background: #000; height: 100dvh; justify-content: center; overflow: hidden; }
+  body.fullscreen > :not(#canvas):not(#text-panel):not(#exit-fullscreen) { display: none; }
+  body.fullscreen #canvas {
+    border: 0; border-radius: 0;
+    width: min(100vw, calc(100dvh * 1.5)); max-width: none;
+  }
+  body.fullscreen #text-panel {
+    position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 2;
+    max-width: min(640px, calc(100vw - 16px));
+  }
+  body.fullscreen #exit-fullscreen {
+    display: block; position: fixed; top: 6px; right: 6px; z-index: 3;
+    width: 32px; height: 32px; border-radius: 16px; border: 0; cursor: pointer;
+    background: rgba(255, 255, 255, 0.18); color: #fff; font-size: 15px; line-height: 1;
+  }
   #text-panel label { display: block; color: var(--muted); margin-bottom: 6px; }
   #text-entry {
     width: 100%; padding: 9px 10px; font: inherit; color: var(--text);
@@ -93,11 +118,16 @@
       <span id="pick-text">Choose app file</span>
       <input type="file" id="pick" accept=".ipa,application/octet-stream" disabled>
     </label>
+    <button class="small" id="fullscreen" type="button">Fullscreen</button>
     <div id="status">Loading the emulator…</div>
   </div>
 
+  <!-- Only visible in fullscreen mode. -->
+  <button id="exit-fullscreen" type="button" aria-label="Leave fullscreen">✕</button>
+
   <details class="panel" id="log-panel">
     <summary>Log</summary>
+    <button class="small" id="copy-log" type="button">Copy log</button>
     <pre id="log"></pre>
   </details>
 
@@ -126,6 +156,53 @@ function log(line) {
   }
 }
 function setStatus(text) { statusEl.textContent = text; }
+
+// Copy the whole log (not just the part that is shown).
+const copyLogEl = document.getElementById('copy-log');
+copyLogEl.addEventListener('click', async () => {
+  const text = logLines.join('\n');
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (e) {
+    // Older browsers, or no permission: fall back to selecting it in a
+    // temporary text box.
+    const box = document.createElement('textarea');
+    box.value = text;
+    document.body.appendChild(box);
+    box.select();
+    document.execCommand('copy');
+    box.remove();
+  }
+  copyLogEl.textContent = 'Copied';
+  setTimeout(() => { copyLogEl.textContent = 'Copy log'; }, 1500);
+});
+
+// Fullscreen mode. The page's own layout does the work (see the styles); the
+// browser's fullscreen and orientation lock are asked for on top of that
+// where they exist, to get rid of the browser's bars as well.
+function setFullscreen(on) {
+  document.body.classList.toggle('fullscreen', on);
+  if (on) {
+    const request = document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen;
+    if (request) {
+      Promise.resolve(request.call(document.documentElement))
+        .then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape'))
+        .catch(() => { /* not allowed or not supported: the layout still applies */ });
+    }
+  } else if (document.fullscreenElement || document.webkitFullscreenElement) {
+    (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+  }
+}
+document.getElementById('fullscreen').addEventListener('click', () => setFullscreen(true));
+document.getElementById('exit-fullscreen').addEventListener('click', () => setFullscreen(false));
+// Leaving the browser's fullscreen (Escape, back gesture) leaves ours too.
+for (const type of ['fullscreenchange', 'webkitfullscreenchange']) {
+  document.addEventListener(type, () => {
+    if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+      document.body.classList.remove('fullscreen');
+    }
+  });
+}
 
 window.addEventListener('error', (e) => {
   log('[page error] ' + (e.message || e));
