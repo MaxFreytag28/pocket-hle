@@ -217,6 +217,219 @@ fn with_texture_info<R>(f: impl FnOnce(&mut TextureInfo) -> R) -> R {
     f(TEXTURE_INFO.lock().unwrap().get_or_insert_with(Default::default))
 }
 
+/// Whether every [GLES1OnGLES2] instance is in fact using one and the same
+/// underlying context.
+///
+/// touchHLE relies on having several independent contexts: at least one for
+/// the app and one for its own use (compositing, presenting frames). A web
+/// page's canvas only has a single WebGL context though, and Emscripten gives
+/// out that same context every time one is "created". So there, the state
+/// that this layer passes straight through to the real context has to be
+/// swapped whenever a different instance is made current. See [RealState].
+const SHARED_REAL_CONTEXT: bool = cfg!(target_os = "emscripten");
+
+/// For [SHARED_REAL_CONTEXT]: the instance that was last made current (0 if
+/// none), and the saved state of the instances that aren't.
+struct SharedContext {
+    current: usize,
+    next_id: usize,
+    /// (instance, its state). There are only ever a few instances.
+    saved: Vec<(usize, RealState)>,
+    /// What a new context's viewport and scissor box should be.
+    initial_viewport: Option<[GLint; 4]>,
+    functions_loaded: bool,
+}
+static SHARED_CONTEXT: Mutex<SharedContext> = Mutex::new(SharedContext {
+    current: 0,
+    next_id: 1,
+    saved: Vec::new(),
+    initial_viewport: None,
+    functions_loaded: false,
+});
+
+/// The state of the real context that this layer doesn't keep track of
+/// itself, because it just passes the calls that set it through.
+///
+/// TODO: This is read back with `glGet` on every switch, which is simple but
+/// not fast. Tracking it as it is set would avoid that. Stencil state is
+/// missing.
+#[derive(Clone)]
+struct RealState {
+    framebuffer: GLint,
+    renderbuffer: GLint,
+    array_buffer: GLint,
+    element_array_buffer: GLint,
+    active_texture: GLint,
+    textures: [GLint; TEXTURE_UNITS],
+    viewport: [GLint; 4],
+    scissor_box: [GLint; 4],
+    capabilities: [bool; PASSED_THROUGH_CAPABILITIES.len()],
+    blend_src: GLint,
+    blend_dst: GLint,
+    blend_equation: GLint,
+    clear_color: [GLfloat; 4],
+    clear_depth: GLfloat,
+    clear_stencil: GLint,
+    color_mask: [GLboolean; 4],
+    depth_mask: GLboolean,
+    depth_func: GLint,
+    depth_range: [GLfloat; 2],
+    cull_face_mode: GLint,
+    front_face: GLint,
+    line_width: GLfloat,
+    polygon_offset: [GLfloat; 2],
+    unpack_alignment: GLint,
+    pack_alignment: GLint,
+}
+impl RealState {
+    /// The state of a context that was just created.
+    fn initial(viewport: [GLint; 4]) -> Self {
+        let mut capabilities = [false; PASSED_THROUGH_CAPABILITIES.len()];
+        for (enabled, &cap) in capabilities.iter_mut().zip(PASSED_THROUGH_CAPABILITIES) {
+            *enabled = cap == gles11::DITHER;
+        }
+        RealState {
+            framebuffer: 0,
+            renderbuffer: 0,
+            array_buffer: 0,
+            element_array_buffer: 0,
+            active_texture: gl::TEXTURE0 as GLint,
+            textures: [0; TEXTURE_UNITS],
+            viewport,
+            scissor_box: viewport,
+            capabilities,
+            blend_src: gl::ONE as GLint,
+            blend_dst: gl::ZERO as GLint,
+            blend_equation: gl::FUNC_ADD as GLint,
+            clear_color: [0.0; 4],
+            clear_depth: 1.0,
+            clear_stencil: 0,
+            color_mask: [gl::TRUE; 4],
+            depth_mask: gl::TRUE,
+            depth_func: gl::LESS as GLint,
+            depth_range: [0.0, 1.0],
+            cull_face_mode: gl::BACK as GLint,
+            front_face: gl::CCW as GLint,
+            line_width: 1.0,
+            polygon_offset: [0.0, 0.0],
+            unpack_alignment: 4,
+            pack_alignment: 4,
+        }
+    }
+
+    /// Read the state of the real context.
+    unsafe fn capture() -> Self {
+        unsafe fn get_int(pname: GLenum) -> GLint {
+            let mut value = 0;
+            gl::GetIntegerv(pname, &mut value);
+            value
+        }
+        unsafe fn get_ints4(pname: GLenum) -> [GLint; 4] {
+            let mut values = [0; 4];
+            gl::GetIntegerv(pname, values.as_mut_ptr());
+            values
+        }
+        unsafe fn get_float(pname: GLenum) -> GLfloat {
+            let mut value = 0.0;
+            gl::GetFloatv(pname, &mut value);
+            value
+        }
+
+        let active_texture = get_int(gl::ACTIVE_TEXTURE);
+        let mut textures = [0; TEXTURE_UNITS];
+        for (unit, texture) in textures.iter_mut().enumerate() {
+            gl::ActiveTexture(gl::TEXTURE0 + unit as GLenum);
+            *texture = get_int(gl::TEXTURE_BINDING_2D);
+        }
+        gl::ActiveTexture(active_texture as GLenum);
+
+        let mut capabilities = [false; PASSED_THROUGH_CAPABILITIES.len()];
+        for (enabled, &cap) in capabilities.iter_mut().zip(PASSED_THROUGH_CAPABILITIES) {
+            *enabled = gl::IsEnabled(cap) != 0;
+        }
+        let mut clear_color = [0.0; 4];
+        gl::GetFloatv(gl::COLOR_CLEAR_VALUE, clear_color.as_mut_ptr());
+        let mut color_mask = [0; 4];
+        gl::GetBooleanv(gl::COLOR_WRITEMASK, color_mask.as_mut_ptr());
+        let mut depth_mask = 0;
+        gl::GetBooleanv(gl::DEPTH_WRITEMASK, &mut depth_mask);
+        let mut depth_range = [0.0; 2];
+        gl::GetFloatv(gl::DEPTH_RANGE, depth_range.as_mut_ptr());
+
+        RealState {
+            framebuffer: get_int(gl::FRAMEBUFFER_BINDING),
+            renderbuffer: get_int(gl::RENDERBUFFER_BINDING),
+            array_buffer: get_int(gl::ARRAY_BUFFER_BINDING),
+            element_array_buffer: get_int(gl::ELEMENT_ARRAY_BUFFER_BINDING),
+            active_texture,
+            textures,
+            viewport: get_ints4(gl::VIEWPORT),
+            scissor_box: get_ints4(gl::SCISSOR_BOX),
+            capabilities,
+            blend_src: get_int(gl::BLEND_SRC_RGB),
+            blend_dst: get_int(gl::BLEND_DST_RGB),
+            blend_equation: get_int(gl::BLEND_EQUATION_RGB),
+            clear_color,
+            clear_depth: get_float(gl::DEPTH_CLEAR_VALUE),
+            clear_stencil: get_int(gl::STENCIL_CLEAR_VALUE),
+            color_mask,
+            depth_mask,
+            depth_func: get_int(gl::DEPTH_FUNC),
+            depth_range,
+            cull_face_mode: get_int(gl::CULL_FACE_MODE),
+            front_face: get_int(gl::FRONT_FACE),
+            line_width: get_float(gl::LINE_WIDTH),
+            polygon_offset: [
+                get_float(gl::POLYGON_OFFSET_FACTOR),
+                get_float(gl::POLYGON_OFFSET_UNITS),
+            ],
+            unpack_alignment: get_int(gl::UNPACK_ALIGNMENT),
+            pack_alignment: get_int(gl::PACK_ALIGNMENT),
+        }
+    }
+
+    /// Put the real context in this state.
+    unsafe fn apply(&self) {
+        gl::BindFramebuffer(gl::FRAMEBUFFER, self.framebuffer as GLuint);
+        gl::BindRenderbuffer(gl::RENDERBUFFER, self.renderbuffer as GLuint);
+        gl::BindBuffer(gl::ARRAY_BUFFER, self.array_buffer as GLuint);
+        gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.element_array_buffer as GLuint);
+        for (unit, &texture) in self.textures.iter().enumerate() {
+            gl::ActiveTexture(gl::TEXTURE0 + unit as GLenum);
+            gl::BindTexture(gl::TEXTURE_2D, texture as GLuint);
+        }
+        gl::ActiveTexture(self.active_texture as GLenum);
+        let [x, y, width, height] = self.viewport;
+        gl::Viewport(x, y, width, height);
+        let [x, y, width, height] = self.scissor_box;
+        gl::Scissor(x, y, width, height);
+        for (&enabled, &cap) in self.capabilities.iter().zip(PASSED_THROUGH_CAPABILITIES) {
+            if enabled {
+                gl::Enable(cap);
+            } else {
+                gl::Disable(cap);
+            }
+        }
+        gl::BlendFunc(self.blend_src as GLenum, self.blend_dst as GLenum);
+        gl::BlendEquation(self.blend_equation as GLenum);
+        let [r, g, b, a] = self.clear_color;
+        gl::ClearColor(r, g, b, a);
+        gl::ClearDepthf(self.clear_depth);
+        gl::ClearStencil(self.clear_stencil);
+        let [r, g, b, a] = self.color_mask;
+        gl::ColorMask(r, g, b, a);
+        gl::DepthMask(self.depth_mask);
+        gl::DepthFunc(self.depth_func as GLenum);
+        gl::DepthRangef(self.depth_range[0], self.depth_range[1]);
+        gl::CullFace(self.cull_face_mode as GLenum);
+        gl::FrontFace(self.front_face as GLenum);
+        gl::LineWidth(self.line_width);
+        gl::PolygonOffset(self.polygon_offset[0], self.polygon_offset[1]);
+        gl::PixelStorei(gl::UNPACK_ALIGNMENT, self.unpack_alignment);
+        gl::PixelStorei(gl::PACK_ALIGNMENT, self.pack_alignment);
+    }
+}
+
 /// A 4-by-4 matrix in OpenGL's layout (column-major).
 type Mat4 = [GLfloat; 16];
 
@@ -287,6 +500,8 @@ struct Program {
 
 pub struct GLES1OnGLES2 {
     gl_ctx: GLContext,
+    /// Identifies this instance for [SHARED_REAL_CONTEXT].
+    id: usize,
     /// The variants of the shader program, each created the first time it is
     /// needed. Bit `n` of the index is set if texture unit `n` is in use.
     programs: [Option<Program>; 1 << TEXTURE_UNITS],
@@ -563,6 +778,18 @@ impl GLES1OnGLES2 {
     }
 }
 
+impl Drop for GLES1OnGLES2 {
+    fn drop(&mut self) {
+        let mut shared = SHARED_CONTEXT.lock().unwrap();
+        let own_id = self.id;
+        shared.saved.retain(|&(id, _)| id != own_id);
+        if shared.current == self.id {
+            // Nothing to save, and whatever comes next starts afresh.
+            shared.current = 0;
+        }
+    }
+}
+
 /// Convert BGRA pixels to RGBA.
 unsafe fn bgra_to_rgba(pixels: *const GLvoid, width: GLsizei, height: GLsizei) -> Vec<u8> {
     let len = width as usize * height as usize * 4;
@@ -589,6 +816,11 @@ impl GLES for GLES1OnGLES2 {
         };
         Ok(Self {
             gl_ctx: window.create_gl_context(GLVersion::GLES20)?,
+            id: {
+                let mut shared = SHARED_CONTEXT.lock().unwrap();
+                shared.next_id += 1;
+                shared.next_id - 1
+            },
             programs: Default::default(),
             matrix_mode: gles11::MODELVIEW,
             modelview_stack: vec![IDENTITY],
@@ -614,7 +846,38 @@ impl GLES for GLES1OnGLES2 {
 
     fn make_current(&self, window: &Window) {
         unsafe { window.make_gl_context_current(&self.gl_ctx) };
-        gl::load_with(|s| window.gl_get_proc_address(s))
+        if !SHARED_REAL_CONTEXT {
+            gl::load_with(|s| window.gl_get_proc_address(s));
+            return;
+        }
+
+        let mut shared = SHARED_CONTEXT.lock().unwrap();
+        // There is only one context, so the functions never change, and
+        // looking them all up again is slow.
+        if !shared.functions_loaded {
+            gl::load_with(|s| window.gl_get_proc_address(s));
+            shared.functions_loaded = true;
+        }
+        let previous = std::mem::replace(&mut shared.current, self.id);
+        if previous == self.id {
+            return;
+        }
+        unsafe {
+            let initial_viewport = *shared.initial_viewport.get_or_insert_with(|| {
+                let mut viewport = [0; 4];
+                gl::GetIntegerv(gl::VIEWPORT, viewport.as_mut_ptr());
+                viewport
+            });
+            if previous != 0 {
+                shared.saved.retain(|&(id, _)| id != previous);
+                shared.saved.push((previous, RealState::capture()));
+            }
+            let state = match shared.saved.iter().position(|&(id, _)| id == self.id) {
+                Some(index) => shared.saved.swap_remove(index).1,
+                None => RealState::initial(initial_viewport),
+            };
+            state.apply();
+        }
     }
 
     unsafe fn driver_description(&self) -> String {

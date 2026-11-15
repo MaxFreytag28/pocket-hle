@@ -777,6 +777,11 @@ impl Window {
             })
         }
 
+        #[cfg(target_os = "emscripten")]
+        for text_event in web_text_input::take_events() {
+            self.event_queue.push_back(Event::TextInput(text_event));
+        }
+
         if controller_updated {
             let (new_x, new_y, pressed, pressed_changed, moved) =
                 self.update_virtual_cursor(options);
@@ -1355,9 +1360,74 @@ impl Window {
 
     pub fn start_text_input(&self) {
         self.video_ctx.text_input().start();
+        #[cfg(target_os = "emscripten")]
+        web_text_input::set_active(true);
     }
     pub fn stop_text_input(&self) {
         self.video_ctx.text_input().stop();
+        #[cfg(target_os = "emscripten")]
+        web_text_input::set_active(false);
+    }
+}
+
+/// Text input for the web build.
+///
+/// In a web browser, and on phones in particular, typed text can only be
+/// received reliably through a real text field on the page: that is what
+/// makes an on-screen keyboard appear. So the page hosting touchHLE provides
+/// that field, and this is the interface between the two:
+///
+/// - `Module.pocketHleTextInput(active)` is called when the app starts or
+///   stops wanting text input.
+/// - `Module.pocketHleTakeText()` is called regularly while it does, and
+///   returns what was typed since the last call, as a string. Backspace is
+///   the character U+0008 and Return is a newline.
+///
+/// Both are optional; without them text input simply doesn't happen. See
+/// `web/index.html` for the page's side.
+#[cfg(target_os = "emscripten")]
+mod web_text_input {
+    use super::TextInputEvent;
+    use std::ffi::{c_char, CStr};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    extern "C" {
+        fn emscripten_run_script(script: *const c_char);
+        fn emscripten_run_script_string(script: *const c_char) -> *const c_char;
+    }
+
+    static ACTIVE: AtomicBool = AtomicBool::new(false);
+
+    pub fn set_active(active: bool) {
+        ACTIVE.store(active, Ordering::Relaxed);
+        let script = if active {
+            c"if (Module.pocketHleTextInput) Module.pocketHleTextInput(true)"
+        } else {
+            c"if (Module.pocketHleTextInput) Module.pocketHleTextInput(false)"
+        };
+        unsafe { emscripten_run_script(script.as_ptr()) };
+    }
+
+    pub fn take_events() -> Vec<TextInputEvent> {
+        if !ACTIVE.load(Ordering::Relaxed) {
+            return Vec::new();
+        }
+        let script = c"Module.pocketHleTakeText ? Module.pocketHleTakeText() : ''";
+        let text = unsafe {
+            let ptr = emscripten_run_script_string(script.as_ptr());
+            if ptr.is_null() {
+                return Vec::new();
+            }
+            CStr::from_ptr(ptr).to_string_lossy().into_owned()
+        };
+        log_dbg!("Text from the page: {:?}", text);
+        text.chars()
+            .map(|c| match c {
+                '\u{8}' => TextInputEvent::Backspace,
+                '\n' => TextInputEvent::Return,
+                c => TextInputEvent::Text(c.to_string()),
+            })
+            .collect()
     }
 }
 
