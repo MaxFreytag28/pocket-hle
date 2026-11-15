@@ -192,6 +192,14 @@ pub const CLASSES: ClassExports = objc_classes! {
     msg![env; dict removeObjectForKey:key]
 }
 
+- (())removePersistentDomainForName:(id)_domain_name { // NSString*
+    // Apps use this with their own bundle identifier to reset all their
+    // settings. Other domains aren't theirs to remove.
+    // TODO: check the name
+    let dict = env.objc.borrow::<NSUserDefaultsHostObject>(this).app_domain_dict;
+    msg![env; dict removeAllObjects]
+}
+
 - (id)dataForKey:(id)key {
     let val: id = msg![env; this objectForKey:key];
     if val == nil {

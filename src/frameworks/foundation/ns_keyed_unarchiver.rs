@@ -18,7 +18,7 @@ use crate::frameworks::foundation::{NSInteger, NSUInteger};
 use crate::frameworks::uikit::ui_geometry::{
     CGPointFromString, CGRectFromString, CGSizeFromString,
 };
-use crate::mem::{ConstVoidPtr, GuestUSize, MutVoidPtr};
+use crate::mem::{ConstVoidPtr, GuestUSize, MutPtr, MutVoidPtr, Ptr};
 use crate::objc::{
     autorelease, id, msg, msg_class, nil, objc_classes, release, retain, ClassExports, HostObject,
     NSZonePtr,
@@ -41,6 +41,10 @@ struct NSKeyedUnarchiverHostObject {
     already_unarchived: Vec<Option<id>>,
     /// Something responding to NSKeyedUnarchiverDelegate
     delegate: id,
+    /// Guest copies of byte buffers handed out by
+    /// `decodeBytesForKey:returnedLength:`. They have to stay valid for as
+    /// long as the unarchiver exists.
+    byte_buffers: Vec<MutVoidPtr>,
 }
 impl HostObject for NSKeyedUnarchiverHostObject {}
 
@@ -55,7 +59,8 @@ pub const CLASSES: ClassExports = objc_classes! {
         plist: Dictionary::new(),
         current_key: None,
         already_unarchived: Vec::new(),
-        delegate: nil
+        delegate: nil,
+        byte_buffers: Vec::new(),
     });
     env.objc.alloc_object(this, unarchiver, &mut env.mem)
 }
@@ -111,6 +116,11 @@ pub const CLASSES: ClassExports = objc_classes! {
 
     for &object in already_unarchived.iter().flatten() {
         release(env, object);
+    }
+    let host_obj = borrow_host_obj(env, this);
+    let byte_buffers = std::mem::take(&mut host_obj.byte_buffers);
+    for buffer in byte_buffers {
+        env.mem.free(buffer);
     }
 
     env.objc.dealloc_object(this, &mut env.mem)
@@ -200,6 +210,35 @@ pub const CLASSES: ClassExports = objc_classes! {
 - (bool)containsValueForKey:(id)key { // NSString*
     assert!(key != nil);
     get_value_to_decode_for_key(env, this, key).is_some()
+}
+
+- (ConstVoidPtr)decodeBytesForKey:(id)key // NSString*
+                   returnedLength:(MutPtr<NSUInteger>)length_ptr {
+    let bytes = get_value_to_decode_for_key(env, this, key)
+        .map(|value| value.as_data().unwrap().to_vec());
+    let Some(bytes) = bytes else {
+        if !length_ptr.is_null() {
+            env.mem.write(length_ptr, 0);
+        }
+        return Ptr::null();
+    };
+    let len: GuestUSize = bytes.len().try_into().unwrap();
+    if !length_ptr.is_null() {
+        env.mem.write(length_ptr, len);
+    }
+    if len == 0 {
+        return Ptr::null();
+    }
+    let guest_bytes: MutVoidPtr = env.mem.alloc(len);
+    env.mem
+        .bytes_at_mut(guest_bytes.cast(), len)
+        .copy_from_slice(&bytes);
+    borrow_host_obj(env, this).byte_buffers.push(guest_bytes);
+    guest_bytes.cast_const()
+}
+
+- (())finishDecoding {
+    // Nothing to do: everything is released in dealloc.
 }
 
 // TODO: add more decode methods
