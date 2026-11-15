@@ -113,7 +113,7 @@
   #archive-message { margin: 0; font-size: 14px; }
 
   #library {
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 22px 8px;
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px 6px;
   }
   .tile {
     position: relative; display: flex; flex-direction: column; align-items: center; gap: 7px;
@@ -122,7 +122,7 @@
     -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
   }
   .tile .icon {
-    width: 72px; height: 72px; border-radius: 16%; flex: none; overflow: hidden;
+    width: min(72px, 90%); aspect-ratio: 1; border-radius: 16%; flex: none; overflow: hidden;
     display: flex; align-items: center; justify-content: center;
     color: #fff; font-size: 24px; font-weight: 700; letter-spacing: 0.01em;
     box-shadow: var(--icon-shadow); transition: transform 0.18s ease, box-shadow 0.18s ease;
@@ -144,17 +144,11 @@
   .compat.partly::before { background: var(--partly); }
   .tile .compat { margin-top: -3px; }
   .tile .more {
-    position: absolute; top: -6px; left: calc(50% + 24px); width: 26px; height: 26px; border-radius: 13px;
+    position: absolute; top: -6px; right: 0; width: 26px; height: 26px; border-radius: 13px;
     border: 1px solid var(--border); background: var(--surface); color: var(--muted); cursor: pointer;
     font-size: 15px; line-height: 1; padding: 0 0 2px; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
   }
   .tile .more:hover { color: var(--text); background: var(--surface-2); }
-  .tile.add { color: var(--muted); }
-  .tile.add .icon {
-    background: transparent; border: 1.5px dashed var(--faint); box-shadow: none;
-    color: var(--muted); font-weight: 300; font-size: 32px;
-  }
-  .tile.add .name { color: var(--muted); font-weight: 500; }
   .tile.dragging { z-index: 5; pointer-events: none; }
   .tile.dragging .icon { transform: scale(1.1); box-shadow: 0 16px 34px rgba(0, 0, 0, 0.4); }
   input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
@@ -179,7 +173,8 @@
     background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px;
   }
   #hub footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: -10px; }
-  #hub footer p { margin: 2px 0; }
+  #hub footer, #library-pages, .library-actions { display: flex; align-items: center; justify-content: center; gap: 10px; }
+  #library-pages { font-size: 13px; color: var(--muted); }
 
   /* Details of a game: a sheet from the bottom on phones, a card elsewhere. */
   .overlay {
@@ -289,15 +284,18 @@
 
     <div class="library-heading">
       <h2>Library</h2>
-      <button class="small" id="browse-archive" type="button">Browse archive</button>
+      <div class="library-actions">
+        <button class="small" id="add-tile" type="button">Add game</button>
+        <button class="small" id="browse-archive" type="button">Browse archive</button>
+      </div>
+      <input hidden type="file" id="pick" accept=".ipa,application/octet-stream">
     </div>
-    <div id="library">
-      <label class="tile add" id="add-tile" tabindex="0">
-        <span class="icon">+</span>
-        <span class="name">Add game</span>
-        <input type="file" id="pick" accept=".ipa,application/octet-stream">
-      </label>
-    </div>
+    <div id="library"></div>
+    <nav id="library-pages" aria-label="Library pages" hidden>
+      <button class="small" id="library-prev" type="button">Previous</button>
+      <span id="library-page" aria-live="polite"></span>
+      <button class="small" id="library-next" type="button">Next</button>
+    </nav>
     <div id="status">Loading the emulator…</div>
 
     <div class="spacer"></div>
@@ -311,8 +309,8 @@
       <pre id="log" hidden></pre>
     </div>
     <footer>
-      <p>Games are app files (.ipa) you add yourself. They and your progress stay on this device; nothing is uploaded.</p>
-      <p><span id="version"></span> · <button class="link" id="show-whats-new" type="button">What's new</button> · Hold a game to rearrange</p>
+      <span id="version"></span>
+      <button class="link" id="show-whats-new" type="button">What's new</button>
     </footer>
   </main>
 
@@ -372,6 +370,11 @@
     </select>
     <select id="archive-os" aria-label="Minimum OS">
       <option value="">Any minimum OS</option>
+      <option value="20000">Min. iOS 2.0</option>
+      <option value="20100">Min. iOS 2.1</option>
+      <option value="20200">Min. iOS 2.2</option>
+      <option value="20201">Min. iOS 2.2.1</option>
+      <option value="30000">Min. iOS 3.0</option>
     </select>
   </div>
   <span id="archive-status" role="status"></span>
@@ -539,7 +542,7 @@ updateButton.addEventListener('click', async () => {
       const registration = await navigator.serviceWorker.getRegistration();
       if (registration) await registration.update().catch(() => {});
     }
-    const files = ['./', 'index.html', 'touchHLE.js', 'touchHLE.wasm', 'touchHLE.data',
+    const files = ['./', 'index.html', document.querySelector('script[src^="archive.js"]').src, 'touchHLE.js', 'touchHLE.wasm', 'touchHLE.data',
       'manifest.webmanifest', 'sw.js', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
     const results = await Promise.all(files.map((file) =>
       fetch(file, { cache: 'reload' }).then((response) => response.ok, () => false)));
@@ -1200,6 +1203,15 @@ window.addEventListener('pointermove', (event) => {
   if (!drag) return;
   const tile = drag.tile;
   const over = document.elementFromPoint(event.clientX, event.clientY);
+  const pager = over?.closest('#library-pages button');
+  if (pager && !pager.disabled && drag.pager !== pager) {
+    const forward = pager.id === 'library-next';
+    const nextPage = libraryPage + (forward ? 1 : -1);
+    const boundary = libraryEl.children[forward ? nextPage * libraryPageSize : libraryPage * libraryPageSize - 1];
+    if (forward) boundary.after(tile); else boundary.before(tile);
+    showLibraryPage(nextPage);
+  }
+  drag.pager = pager;
   const target = over && over.closest('.tile[data-key]');
   if (target && target !== tile) {
     const tiles = [...libraryEl.querySelectorAll('.tile[data-key]')];
@@ -1314,19 +1326,10 @@ async function resetProgress(bundleId) {
 }
 
 // Version and what changed in it, shown once after each update.
-const VERSION = '2026.11.16.2';
+const VERSION = '2026.11.16.3';
 const WHATS_NEW = [
-  'Browse the IPA Archive from your library and import a game directly.',
-  'Games now save when you switch away from the app, like on old iPhones: the game closes and starts again when you come back.',
-  'Snail Mail is drawn at 3x resolution, so its edges are sharp.',
-  'Snail Mail no longer freezes after the intro, and its intro and levels draw correctly.',
-  'A cleaner, calmer look for the hub.',
-  'Tap ⋯ on a game for its details, to rename it, reset its progress or remove it.',
-  'Games show their real names, and whether they are known to work.',
-  'Hold a game for a moment, then drag it to rearrange.',
-  'Tilt controls: games that use tilting follow your phone\'s motion.',
-  'Light and dark theme switch at the top.',
-  'Snail Mail gets further (still being worked on).',
+  'Archive search now includes both catalogs, with early iPhone OS filters available immediately.',
+  'Your library shows 20 games per page. Hold a game to rearrange it.',
 ];
 const SEEN_KEY = 'pocket-hle-seen-version';
 const whatsNewEl = document.getElementById('whats-new');
@@ -1431,6 +1434,22 @@ function tileFor(app) {
   tile.append(icon, name, compat, more);
   return tile;
 }
+const libraryPageSize = 20;
+let libraryPage = 0;
+function showLibraryPage(page) {
+  const tiles = [...libraryEl.children];
+  const last = Math.max(0, Math.ceil(tiles.length / libraryPageSize) - 1);
+  libraryPage = Math.max(0, Math.min(page, last));
+  const start = libraryPage * libraryPageSize;
+  tiles.forEach((tile, i) => { tile.hidden = i < start || i >= start + libraryPageSize; });
+  document.getElementById('library-pages').hidden = !last;
+  document.getElementById('library-page').textContent = (libraryPage + 1) + ' / ' + (last + 1);
+  document.getElementById('library-prev').disabled = !libraryPage;
+  document.getElementById('library-next').disabled = libraryPage === last;
+}
+document.getElementById('library-prev').onclick = () => showLibraryPage(libraryPage - 1);
+document.getElementById('library-next').onclick = () => showLibraryPage(libraryPage + 1);
+
 async function showLibrary() {
   let apps = [];
   try {
@@ -1438,8 +1457,8 @@ async function showLibrary() {
   } catch (e) {
     log('[apps] The library could not be read: ' + e);
   }
-  for (const tile of [...libraryEl.querySelectorAll('.tile:not(.add)')]) tile.remove();
-  for (const app of apps) libraryEl.insertBefore(tileFor(app), addTile);
+  libraryEl.replaceChildren(...apps.map(tileFor));
+  showLibraryPage(libraryPage);
   fillMissingDetails(apps);
   return apps;
 }
@@ -1452,9 +1471,7 @@ showLibrary().then((apps) => {
   if (app) launch(app);
 });
 
-addTile.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); pickEl.click(); }
-});
+addTile.onclick = () => pickEl.click();
 async function keepGame(file, replace) {
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   const details = await appDetails(file);
@@ -1543,7 +1560,7 @@ async function maybeAutoload() {
   start(new Uint8Array(await response.arrayBuffer()), 'test-app.ipa');
 }
 </script>
-<script src="archive.js"></script>
+<script src="archive.js?v=2026.11.16.3"></script>
 <script async src="touchHLE.js"></script>
 </body>
 </html>
