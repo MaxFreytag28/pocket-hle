@@ -34,12 +34,45 @@ pub enum DeviceOrientation {
     LandscapeLeft,
     LandscapeRight,
 }
+/// The kind of device being emulated, which decides the size of the screen.
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub enum DeviceFamily {
+    /// iPhone or iPod touch: 320 by 480 points.
+    IPhone,
+    /// iPad: 768 by 1024 points.
+    IPad,
+}
+static DEVICE_IS_IPAD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Choose the device to emulate. This must be done before the window is
+/// created, and is for the whole process: there is only one screen.
+pub fn set_device_family(family: DeviceFamily) {
+    DEVICE_IS_IPAD.store(
+        family == DeviceFamily::IPad,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+pub fn device_family() -> DeviceFamily {
+    if DEVICE_IS_IPAD.load(std::sync::atomic::Ordering::Relaxed) {
+        DeviceFamily::IPad
+    } else {
+        DeviceFamily::IPhone
+    }
+}
+/// Size in points of the emulated device's screen, in portrait orientation.
+pub fn device_screen_size() -> (u32, u32) {
+    match device_family() {
+        DeviceFamily::IPhone => (320, 480),
+        DeviceFamily::IPad => (768, 1024),
+    }
+}
+
 fn size_for_orientation(orientation: DeviceOrientation, scale_hack: NonZeroU32) -> (u32, u32) {
     let scale_hack = scale_hack.get();
+    let (short_side, long_side) = device_screen_size();
     match orientation {
-        DeviceOrientation::Portrait => (320 * scale_hack, 480 * scale_hack),
-        DeviceOrientation::LandscapeLeft => (480 * scale_hack, 320 * scale_hack),
-        DeviceOrientation::LandscapeRight => (480 * scale_hack, 320 * scale_hack),
+        DeviceOrientation::Portrait => (short_side * scale_hack, long_side * scale_hack),
+        DeviceOrientation::LandscapeLeft => (long_side * scale_hack, short_side * scale_hack),
+        DeviceOrientation::LandscapeRight => (long_side * scale_hack, short_side * scale_hack),
     }
 }
 fn rotate_fullscreen_size(orientation: DeviceOrientation, screen_size: (u32, u32)) -> (u32, u32) {

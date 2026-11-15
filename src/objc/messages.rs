@@ -204,14 +204,29 @@ Type mismatch when sending message {} to {:?}!
             is_metaclass,
         }) = host_object.as_any().downcast_ref()
         {
-            log!(
-                "Call to faked class \"{}\" ({:?}) {} method \"{}\". Behaving as if message was sent to nil.",
-                name,
-                class,
-                if is_metaclass { "class" } else { "instance" },
-                selector.as_str(&env.mem),
-            );
+            // Some apps do this every frame, so only report each method once.
+            thread_local! {
+                static REPORTED: std::cell::RefCell<std::collections::HashSet<(String, String)>> =
+                    Default::default();
+            }
+            let key = (name.clone(), selector.as_str(&env.mem).to_string());
+            if REPORTED.with(|reported| reported.borrow_mut().insert(key)) {
+                log!(
+                    "Call to faked class \"{}\" ({:?}) {} method \"{}\". Behaving as if message was sent to nil. (Further calls are not reported.)",
+                    name,
+                    class,
+                    if is_metaclass { "class" } else { "instance" },
+                    selector.as_str(&env.mem),
+                );
+            }
             env.cpu.regs_mut()[0..2].fill(0);
+            // A few methods of faked classes are relied on to return an
+            // object, and apps crash if they get nil.
+            // OpenFeint: the user id is "0" when nobody is logged in.
+            if name == "OpenFeint" && selector.as_str(&env.mem) == "lastLoggedInUserId" {
+                let string = crate::frameworks::foundation::ns_string::get_static_str(env, "0");
+                env.cpu.regs_mut()[0] = string.to_bits();
+            }
             return;
         } else {
             panic!(

@@ -124,6 +124,24 @@ impl Bundle {
         }
     }
 
+    /// Whether the app is made for iPad only (as opposed to for iPhone, or
+    /// for both, in which case it is run as an iPhone app).
+    pub fn is_ipad_only(&self) -> bool {
+        let Some(families) = self.plist.get("UIDeviceFamily") else {
+            return false;
+        };
+        let family_number = |value: &Value| {
+            value
+                .as_unsigned_integer()
+                .or_else(|| value.as_string().and_then(|s| s.parse().ok()))
+        };
+        let families: Vec<Option<u64>> = match families.as_array() {
+            Some(array) => array.iter().map(family_number).collect(),
+            None => vec![family_number(families)],
+        };
+        families.contains(&Some(2)) && !families.contains(&Some(1))
+    }
+
     pub fn status_bar_hidden(&self) -> bool {
         self.plist
             .get("UIStatusBarHidden")

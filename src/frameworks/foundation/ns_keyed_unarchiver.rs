@@ -11,6 +11,7 @@
 //!   plists, e.g. `plutil -p` or `println!("{:#?}", plist::Value::...);`.
 //! - Apple's [Archives and Serializations Programming Guide](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/Archiving/Articles/archives.html)
 
+use super::nib_archive;
 use super::ns_string::{from_rust_string, get_static_str, to_rust_string};
 use crate::dyld::{ConstantExports, HostConstant};
 use crate::frameworks::core_graphics::{CGPoint, CGRect, CGSize};
@@ -97,8 +98,12 @@ pub const CLASSES: ClassExports = objc_classes! {
     assert!(host_obj.current_key.is_none());
     assert!(host_obj.plist.is_empty());
 
-    let plist = Value::from_reader(Cursor::new(slice)).unwrap();
-    let plist = plist.into_dictionary().unwrap();
+    let plist = if nib_archive::is_nib_archive(slice) {
+        nib_archive::to_keyed_archive(slice).expect("Malformed NIBArchive")
+    } else {
+        let plist = Value::from_reader(Cursor::new(slice)).unwrap();
+        plist.into_dictionary().unwrap()
+    };
     assert!(plist["$version"].as_unsigned_integer() == Some(100000));
     assert!(plist["$archiver"].as_string() == Some("NSKeyedArchiver"));
 
@@ -146,13 +151,13 @@ pub const CLASSES: ClassExports = objc_classes! {
 
 - (bool)decodeBoolForKey:(id)key { // NSString *
     get_value_to_decode_for_key(env, this, key)
-        .is_some_and(|value| value.as_boolean().unwrap())
+        .is_some_and(|value| value_as_i64(value) != 0)
 }
 
 - (f64)decodeDoubleForKey:(id)key { // NSString *
     get_value_to_decode_for_key(env, this, key).map_or(
         0.0,
-        |value| value.as_real().unwrap()
+        |value| value_as_f64(value)
     )
 }
 
@@ -160,7 +165,7 @@ pub const CLASSES: ClassExports = objc_classes! {
     // TODO: Check bounds, raise NSRangeException if it doesn't fit
     get_value_to_decode_for_key(env, this, key).map_or(
         0.0,
-        |value| value.as_real().unwrap()
+        |value| value_as_f64(value)
     ) as f32
 }
 
@@ -168,7 +173,7 @@ pub const CLASSES: ClassExports = objc_classes! {
     // TODO: Check bounds, raise NSRangeException if it doesn't fit
     get_value_to_decode_for_key(env, this, key).map_or(
         0,
-        |value| value.as_signed_integer().unwrap()
+        |value| value_as_i64(value)
     ).try_into().unwrap()
 }
 
@@ -176,7 +181,7 @@ pub const CLASSES: ClassExports = objc_classes! {
     // TODO: Check bounds, raise NSRangeException if it doesn't fit
     get_value_to_decode_for_key(env, this, key).map_or(
         0,
-        |value| value.as_signed_integer().unwrap()
+        |value| value_as_i64(value)
     ).try_into().unwrap()
 }
 
@@ -184,14 +189,14 @@ pub const CLASSES: ClassExports = objc_classes! {
     // TODO: Check bounds, raise NSRangeException if it doesn't fit
     get_value_to_decode_for_key(env, this, key).map_or(
         0,
-        |value| value.as_signed_integer().unwrap()
+        |value| value_as_i64(value)
     ).try_into().unwrap()
 }
 
 - (i64)decodeInt64ForKey:(id)key { // NSString *
     get_value_to_decode_for_key(env, this, key).map_or(
         0,
-        |value| value.as_signed_integer().unwrap()
+        |value| value_as_i64(value)
     )
 }
 
@@ -245,14 +250,26 @@ pub const CLASSES: ClassExports = objc_classes! {
 
 // These come from a category in UIKit's UIGeometry.h
 - (CGPoint)decodeCGPointForKey:(id)key { // NSString*
+    if let Some(floats) = decode_floats(env, this, key) {
+        return CGPoint { x: floats[0], y: floats[1] };
+    }
     let string: id = msg![env; this decodeObjectForKey:key];
     CGPointFromString(env, string)
 }
 - (CGSize)decodeCGSizeForKey:(id)key { // NSString*
+    if let Some(floats) = decode_floats(env, this, key) {
+        return CGSize { width: floats[0], height: floats[1] };
+    }
     let string: id = msg![env; this decodeObjectForKey:key];
     CGSizeFromString(env, string)
 }
 - (CGRect)decodeCGRectForKey:(id)key { // NSString*
+    if let Some(floats) = decode_floats(env, this, key) {
+        return CGRect {
+            origin: CGPoint { x: floats[0], y: floats[1] },
+            size: CGSize { width: floats[2], height: floats[3] },
+        };
+    }
     let string: id = msg![env; this decodeObjectForKey:key];
     CGRectFromString(env, string)
 }
@@ -260,6 +277,45 @@ pub const CLASSES: ClassExports = objc_classes! {
 @end
 
 };
+
+/// Numbers are not always stored with the type they are asked for as (nibs in
+/// the NIBArchive format use the smallest type that fits), so convert.
+fn value_as_f64(value: &Value) -> f64 {
+    match value {
+        Value::Real(real) => *real,
+        Value::Integer(int) => int.as_signed().map_or(0.0, |int| int as f64),
+        Value::Boolean(boolean) => *boolean as u8 as f64,
+        _ => panic!("Not a number: {:?}", value),
+    }
+}
+fn value_as_i64(value: &Value) -> i64 {
+    match value {
+        Value::Real(real) => *real as i64,
+        Value::Integer(int) => int.as_signed().unwrap(),
+        Value::Boolean(boolean) => *boolean as i64,
+        _ => panic!("Not a number: {:?}", value),
+    }
+}
+
+/// Points, sizes and rectangles in NIBArchive-format nibs are raw data: a
+/// type byte, then 32-bit or 64-bit floats. Returns four values (the missing
+/// ones are zero), or [None] if the key is absent or isn't such data, as in
+/// plist-format nibs, which use strings.
+fn decode_floats(env: &mut Environment, unarchiver: id, key: id) -> Option<[f32; 4]> {
+    let data = get_value_to_decode_for_key(env, unarchiver, key)?.as_data()?;
+    let data = data.get(1..)?;
+    let mut floats = [0.0; 4];
+    if data.len() % 8 == 0 && data.len() / 8 >= 2 && data.len() / 4 != 4 {
+        for (float, bytes) in floats.iter_mut().zip(data.chunks_exact(8)) {
+            *float = f64::from_le_bytes(bytes.try_into().unwrap()) as f32;
+        }
+    } else {
+        for (float, bytes) in floats.iter_mut().zip(data.chunks_exact(4)) {
+            *float = f32::from_le_bytes(bytes.try_into().unwrap());
+        }
+    }
+    Some(floats)
+}
 
 fn borrow_host_obj(env: &mut Environment, unarchiver: id) -> &mut NSKeyedUnarchiverHostObject {
     env.objc.borrow_mut(unarchiver)

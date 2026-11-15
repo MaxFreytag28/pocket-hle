@@ -44,7 +44,10 @@ pub const CLASSES: ClassExports = objc_classes! {
     // TODO: once rotation is supported, this must change with the rotation!
     CGRect {
         origin: CGPoint { x: 0.0, y: 0.0 },
-        size: CGSize { width: 320.0, height: 480.0 },
+        size: {
+            let (width, height) = crate::window::device_screen_size();
+            CGSize { width: width as f32, height: height as f32 }
+        },
     }
 }
 

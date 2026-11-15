@@ -286,6 +286,10 @@ impl Environment {
                 None
             };
 
+            if bundle.is_ipad_only() {
+                log!("This is an iPad app: emulating an iPad screen.");
+                window::set_device_family(window::DeviceFamily::IPad);
+            }
             Some(window::Window::new(
                 &format!(
                     "{} (touchHLE {}{}{})",

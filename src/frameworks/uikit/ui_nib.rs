@@ -371,6 +371,9 @@ fn load_nib_file(env: &mut Environment, ui_nib: id, path: GuestPathBuf) -> Resul
     let visibles_count: NSUInteger = msg![env; visibles count];
     for i in 0..visibles_count {
         let visible: id = msg![env; visibles objectAtIndex:i];
+        // A window that is on screen is kept alive by the system, even if
+        // the app has no outlet for it (which would retain it).
+        retain(env, visible);
         () = msg![env; visible setHidden:false];
     }
 

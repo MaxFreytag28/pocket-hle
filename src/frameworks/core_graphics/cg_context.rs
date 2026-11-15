@@ -97,6 +97,20 @@ fn CGContextSetGrayFillColor(
         .rgb_fill_color = color;
 }
 
+/// `CGBlendMode`
+type CGBlendMode = i32;
+const kCGBlendModeNormal: CGBlendMode = 0;
+const kCGBlendModeCopy: CGBlendMode = 17;
+
+fn CGContextSetBlendMode(_env: &mut Environment, _context: CGContextRef, mode: CGBlendMode) {
+    // Apps typically use this to select "copy" before drawing an image into
+    // an empty bitmap context to get at its pixels, where it makes no
+    // difference to the result.
+    if mode != kCGBlendModeNormal && mode != kCGBlendModeCopy {
+        log!("TODO: CGContextSetBlendMode({}) is ignored", mode);
+    }
+}
+
 pub fn CGContextFillRect(env: &mut Environment, context: CGContextRef, rect: CGRect) {
     cg_bitmap_context::fill_rect(env, context, rect, /* clear: */ false);
 }
@@ -196,6 +210,7 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(CGContextRelease(_)),
     export_c_func!(CGContextSetRGBFillColor(_, _, _, _, _)),
     export_c_func!(CGContextSetGrayFillColor(_, _, _)),
+    export_c_func!(CGContextSetBlendMode(_, _)),
     export_c_func!(CGContextFillRect(_, _)),
     export_c_func!(CGContextClearRect(_, _)),
     export_c_func!(CGContextClipToRect(_, _)),

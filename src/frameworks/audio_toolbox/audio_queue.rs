@@ -399,6 +399,24 @@ fn property_size(property_id: AudioQueuePropertyID) -> GuestUSize {
     }
 }
 
+fn AudioQueueSetProperty(
+    _env: &mut Environment,
+    in_aq: AudioQueueRef,
+    in_property_id: AudioQueuePropertyID,
+    _in_data: ConstVoidPtr,
+    _in_data_size: u32,
+) -> OSStatus {
+    return_if_null!(in_aq);
+    // The settable properties (magic cookie, channel layout, metering,
+    // hardware codec policy...) don't affect how the queue is played here.
+    log!(
+        "TODO: AudioQueueSetProperty({:?}, {:#x}, ...) is ignored",
+        in_aq,
+        in_property_id
+    );
+    0 // success
+}
+
 fn AudioQueueGetPropertySize(
     env: &mut Environment,
     in_aq: AudioQueueRef,
@@ -1092,6 +1110,7 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(AudioQueueRemovePropertyListener(_, _, _, _)),
     export_c_func!(AudioQueueGetPropertySize(_, _, _)),
     export_c_func!(AudioQueueGetProperty(_, _, _, _)),
+    export_c_func!(AudioQueueSetProperty(_, _, _, _)),
     export_c_func!(AudioQueuePrime(_, _, _)),
     export_c_func!(AudioQueueStart(_, _)),
     export_c_func!(AudioQueuePause(_)),
