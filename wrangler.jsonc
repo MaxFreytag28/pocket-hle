@@ -1,0 +1,8 @@
+{
+  // Static site: the built web version of pocket-hle. There is no build step
+  // here; the files in public/ are built on a PC (dev-scripts/web-build.ps1
+  // and web-dist.ps1 on the main branch) and committed to this branch.
+  "name": "pocket-hle",
+  "compatibility_date": "2026-01-01",
+  "assets": { "directory": "./public" }
+}
