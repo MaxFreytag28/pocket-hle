@@ -616,7 +616,30 @@ pub const CLASSES: ClassExports = objc_classes! {
         }
     }
     // TODO: runtime here is O(n^2), it could be O(n) instead
-    for i in to_remove {
+    // Last first, so that the indices of the others stay valid.
+    for i in to_remove.into_iter().rev() {
+        () = msg![env; this removeObjectAtIndex:i];
+    }
+}
+
+- (())removeObjectsInArray:(id)other_array { // NSArray *
+    // Work out what to remove before removing anything, in case the other
+    // array is this array.
+    let other_count: NSUInteger = msg![env; other_array count];
+    let count: NSUInteger = msg![env; this count];
+    let mut to_remove = Vec::new();
+    for i in 0..count {
+        let curr_object: id = msg![env; this objectAtIndex:i];
+        for j in 0..other_count {
+            let other_object: id = msg![env; other_array objectAtIndex:j];
+            let equal: bool = msg![env; other_object isEqual:curr_object];
+            if equal {
+                to_remove.push(i);
+                break;
+            }
+        }
+    }
+    for i in to_remove.into_iter().rev() {
         () = msg![env; this removeObjectAtIndex:i];
     }
 }
