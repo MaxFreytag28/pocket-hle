@@ -905,6 +905,12 @@ impl Window {
     /// Get the real or simulated accelerometer output.
     /// See also [crate::frameworks::uikit::ui_accelerometer].
     pub fn get_acceleration(&self, options: &Options) -> (f32, f32, f32) {
+        // In the browser, the page passes on the phone's motion sensor.
+        #[cfg(target_os = "emscripten")]
+        if let Some(acceleration) = web_motion::get() {
+            return acceleration;
+        }
+
         if self.controllers.is_empty() || !options.analog_stick_tilt_controls {
             if let Some(ref accelerometer) = self.accelerometer {
                 let data = accelerometer.get_data().unwrap();
@@ -1561,3 +1567,32 @@ pub fn get_preferred_country_codes() -> Vec<String> {
         .filter_map(|loc| loc.country)
         .collect()
 }
+
+#[cfg(target_os = "emscripten")]
+mod web_motion {
+    //! The device's motion sensor in the browser, as read by the page (see
+    //! `Module.pocketHleMotion` in web/index.html): already in iPhone OS
+    //! terms, i.e. in g and pointing towards the ground.
+    use std::ffi::{c_char, CStr};
+
+    extern "C" {
+        fn emscripten_run_script_string(script: *const c_char) -> *const c_char;
+    }
+
+    pub fn get() -> Option<(f32, f32, f32)> {
+        let script = c"Module.pocketHleMotion ? Module.pocketHleMotion() : ''";
+        let text = unsafe {
+            let ptr = emscripten_run_script_string(script.as_ptr());
+            if ptr.is_null() {
+                return None;
+            }
+            CStr::from_ptr(ptr).to_string_lossy().into_owned()
+        };
+        let mut values = text.split(',').map(|value| value.trim().parse::<f32>());
+        match (values.next(), values.next(), values.next()) {
+            (Some(Ok(x)), Some(Ok(y)), Some(Ok(z))) => Some((x, y, z)),
+            _ => None,
+        }
+    }
+}
+

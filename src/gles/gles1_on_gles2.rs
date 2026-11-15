@@ -521,13 +521,6 @@ pub struct GLES1OnGLES2 {
     current_normal: [GLfloat; 3],
     /// The buffer bound to `GL_ARRAY_BUFFER`.
     array_buffer: GLuint,
-    /// The buffer bound to `GL_ELEMENT_ARRAY_BUFFER`.
-    element_array_buffer: GLuint,
-    /// Buffers of our own that vertex data and indices given as pointers
-    /// ("client-side arrays") are copied to for drawing: WebGL can only draw
-    /// from buffers. One per attribute, then one for indices. Created when
-    /// first needed.
-    scratch_buffers: [GLuint; SCRATCH_BUFFER_COUNT],
 
     alpha_test: bool,
     alpha_func: GLenum,
@@ -539,12 +532,6 @@ pub struct GLES1OnGLES2 {
 }
 
 /// Compile a shader from `prefix` (for `#define`s) followed by `source`.
-const SCRATCH_BUFFER_COUNT: usize = 5;
-const SCRATCH_POSITION: usize = 0;
-const SCRATCH_COLOR: usize = 1;
-const SCRATCH_TEX_COORD: [usize; 2] = [2, 3];
-const SCRATCH_INDICES: usize = 4;
-
 fn gl_type_size(type_: GLenum) -> usize {
     match type_ {
         gles11::BYTE | gles11::UNSIGNED_BYTE => 1,
@@ -680,11 +667,8 @@ impl GLES1OnGLES2 {
     /// Set up the shader program, its uniforms and the vertex attributes
     /// according to the current OpenGL ES 1.1 state. Returns `false` if there
     /// is nothing to draw.
-    ///
-    /// `vertex_count` is how many vertices the draw call can refer to, which
-    /// decides how much is copied of arrays that were given as pointers.
-    unsafe fn prepare_draw(&mut self, vertex_count: usize) -> bool {
-        if !self.vertex_array.enabled || vertex_count == 0 {
+    unsafe fn prepare_draw(&mut self) -> bool {
+        if !self.vertex_array.enabled {
             return false;
         }
         let mut variant = 0;
@@ -752,38 +736,8 @@ impl GLES1OnGLES2 {
 
         // Integer colours are in the range of the type and get scaled to
         // 0..1, but integer positions and texture coordinates are used as-is.
-        unsafe fn set_attribute(
-            location: GLuint,
-            array: &ArrayState,
-            normalized: bool,
-            vertex_count: usize,
-            scratch_buffer: &mut GLuint,
-        ) {
-            let pointer = if array.buffer != 0 {
-                gl::BindBuffer(gl::ARRAY_BUFFER, array.buffer);
-                array.pointer
-            } else {
-                // A pointer to the data itself: copy what the draw call can
-                // use of it to our own buffer.
-                let element_size = array.size as usize * gl_type_size(array.type_);
-                let stride = if array.stride == 0 {
-                    element_size
-                } else {
-                    array.stride as usize
-                };
-                let byte_count = (vertex_count - 1) * stride + element_size;
-                if *scratch_buffer == 0 {
-                    gl::GenBuffers(1, scratch_buffer);
-                }
-                gl::BindBuffer(gl::ARRAY_BUFFER, *scratch_buffer);
-                gl::BufferData(
-                    gl::ARRAY_BUFFER,
-                    byte_count as GLsizeiptr,
-                    array.pointer,
-                    gl::STREAM_DRAW,
-                );
-                std::ptr::null()
-            };
+        unsafe fn set_attribute(location: GLuint, array: &ArrayState, normalized: bool) {
+            gl::BindBuffer(gl::ARRAY_BUFFER, array.buffer);
             gl::EnableVertexAttribArray(location);
             gl::VertexAttribPointer(
                 location,
@@ -791,25 +745,13 @@ impl GLES1OnGLES2 {
                 array.type_,
                 (normalized && array.type_ != gles11::FLOAT && array.type_ != gles11::FIXED) as u8,
                 array.stride,
-                pointer,
+                array.pointer,
             );
         }
 
-        set_attribute(
-            ATTRIB_POSITION,
-            &self.vertex_array,
-            false,
-            vertex_count,
-            &mut self.scratch_buffers[SCRATCH_POSITION],
-        );
+        set_attribute(ATTRIB_POSITION, &self.vertex_array, false);
         if self.color_array.enabled {
-            set_attribute(
-                ATTRIB_COLOR,
-                &self.color_array,
-                true,
-                vertex_count,
-                &mut self.scratch_buffers[SCRATCH_COLOR],
-            );
+            set_attribute(ATTRIB_COLOR, &self.color_array, true);
         } else {
             gl::DisableVertexAttribArray(ATTRIB_COLOR);
             let [r, g, b, a] = self.current_color;
@@ -817,13 +759,7 @@ impl GLES1OnGLES2 {
         }
         for (i, unit) in self.units.iter().enumerate() {
             if unit.tex_coord_array.enabled {
-                set_attribute(
-                    ATTRIB_TEX_COORD[i],
-                    &unit.tex_coord_array,
-                    false,
-                    vertex_count,
-                    &mut self.scratch_buffers[SCRATCH_TEX_COORD[i]],
-                );
+                set_attribute(ATTRIB_TEX_COORD[i], &unit.tex_coord_array, false);
             } else {
                 gl::DisableVertexAttribArray(ATTRIB_TEX_COORD[i]);
                 gl::VertexAttrib4f(ATTRIB_TEX_COORD[i], 0.0, 0.0, 0.0, 1.0);
@@ -906,8 +842,6 @@ impl GLES for GLES1OnGLES2 {
             current_color: [1.0; 4],
             current_normal: [0.0, 0.0, 1.0],
             array_buffer: 0,
-            element_array_buffer: 0,
-            scratch_buffers: [0; SCRATCH_BUFFER_COUNT],
             alpha_test: false,
             alpha_func: gles11::ALWAYS,
             alpha_ref: 0.0,
@@ -1348,12 +1282,8 @@ impl GLES for GLES1OnGLES2 {
     unsafe fn DeleteBuffers(&mut self, n: GLsizei, buffers: *const GLuint) {
         // Deleting a bound buffer unbinds it.
         for i in 0..n.max(0) as usize {
-            let buffer = buffers.add(i).read_unaligned();
-            if buffer == self.array_buffer {
+            if buffers.add(i).read_unaligned() == self.array_buffer {
                 self.array_buffer = 0;
-            }
-            if buffer == self.element_array_buffer {
-                self.element_array_buffer = 0;
             }
         }
         gl::DeleteBuffers(n, buffers);
@@ -1361,8 +1291,6 @@ impl GLES for GLES1OnGLES2 {
     unsafe fn BindBuffer(&mut self, target: GLenum, buffer: GLuint) {
         if target == gles11::ARRAY_BUFFER {
             self.array_buffer = buffer;
-        } else if target == gles11::ELEMENT_ARRAY_BUFFER {
-            self.element_array_buffer = buffer;
         }
         gl::BindBuffer(target, buffer);
     }
@@ -1469,10 +1397,43 @@ impl GLES for GLES1OnGLES2 {
 
     // Drawing
     unsafe fn DrawArrays(&mut self, mode: GLenum, first: GLint, count: GLsizei) {
-        if first < 0 || count <= 0 {
+        // WebGL can only draw from buffers, so Emscripten copies arrays given
+        // as pointers into buffers itself, but only the first `count`
+        // vertices: drawing from `first` onwards would read past the end of
+        // the copy. So the pointers are moved to the first vertex instead.
+        if cfg!(target_os = "emscripten") && first > 0 {
+            fn shift(array: &mut ArrayState, first: usize) -> *const GLvoid {
+                let original = array.pointer;
+                if array.enabled && array.buffer == 0 {
+                    let element_size = array.size as usize * gl_type_size(array.type_);
+                    let stride = if array.stride == 0 {
+                        element_size
+                    } else {
+                        array.stride as usize
+                    };
+                    array.pointer = original.cast::<u8>().wrapping_add(first * stride).cast();
+                }
+                original
+            }
+            let first = first as usize;
+            let vertex = shift(&mut self.vertex_array, first);
+            let color = shift(&mut self.color_array, first);
+            let tex_coords: Vec<_> = self
+                .units
+                .iter_mut()
+                .map(|unit| shift(&mut unit.tex_coord_array, first))
+                .collect();
+            if self.prepare_draw() {
+                gl::DrawArrays(mode, 0, count);
+            }
+            self.vertex_array.pointer = vertex;
+            self.color_array.pointer = color;
+            for (unit, pointer) in self.units.iter_mut().zip(tex_coords) {
+                unit.tex_coord_array.pointer = pointer;
+            }
             return;
         }
-        if self.prepare_draw((first + count) as usize) {
+        if self.prepare_draw() {
             gl::DrawArrays(mode, first, count);
         }
     }
@@ -1483,49 +1444,8 @@ impl GLES for GLES1OnGLES2 {
         type_: GLenum,
         indices: *const GLvoid,
     ) {
-        if count <= 0 {
-            return;
-        }
-        if self.element_array_buffer != 0 {
-            // The indices are in a buffer, where they can't be looked at.
-            // Arrays given as pointers are then assumed to have as many
-            // vertices as there are indices.
-            // TODO: keep track of the contents of element array buffers.
-            if self.prepare_draw(count as usize) {
-                gl::DrawElements(mode, count, type_, indices);
-            }
-            return;
-        }
-        // The indices are given as a pointer.
-        let count_usize = count as usize;
-        let (max_index, index_size) = match type_ {
-            gles11::UNSIGNED_BYTE => {
-                let indices = std::slice::from_raw_parts(indices as *const u8, count_usize);
-                (indices.iter().copied().max().unwrap() as usize, 1)
-            }
-            gles11::UNSIGNED_SHORT => {
-                let indices = indices as *const u16;
-                let max = (0..count_usize)
-                    .map(|i| indices.add(i).read_unaligned())
-                    .max()
-                    .unwrap();
-                (max as usize, 2)
-            }
-            _ => return,
-        };
-        if self.prepare_draw(max_index + 1) {
-            if self.scratch_buffers[SCRATCH_INDICES] == 0 {
-                gl::GenBuffers(1, &mut self.scratch_buffers[SCRATCH_INDICES]);
-            }
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.scratch_buffers[SCRATCH_INDICES]);
-            gl::BufferData(
-                gl::ELEMENT_ARRAY_BUFFER,
-                (count_usize * index_size) as GLsizeiptr,
-                indices,
-                gl::STREAM_DRAW,
-            );
-            gl::DrawElements(mode, count, type_, std::ptr::null());
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
+        if self.prepare_draw() {
+            gl::DrawElements(mode, count, type_, indices);
         }
     }
 

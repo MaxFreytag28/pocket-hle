@@ -27,6 +27,10 @@
       --accent: #0b63ce; --border: #d5d9e0;
     }
   }
+  :root[data-theme="light"] {
+    --bg: #f4f5f7; --panel: #ffffff; --text: #1b1e24; --muted: #5d6573;
+    --accent: #0b63ce; --border: #d5d9e0;
+  }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
   /* The page itself never scrolls (or bounces, on phones); the hub scrolls
@@ -84,11 +88,11 @@
   .tile .name { font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
   .tile.add { border-style: dashed; color: var(--muted); justify-content: center; }
   .tile.add .icon { background: transparent; border: 2px dashed var(--border); color: var(--muted); font-weight: 400; font-size: 34px; }
-  .tile .remove {
+  .tile .more {
     position: absolute; top: 4px; right: 4px; width: 28px; height: 28px; border-radius: 14px;
-    border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px;
+    border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 18px; line-height: 1;
   }
-  .tile .remove:hover { background: var(--border); color: var(--text); }
+  .tile .more:hover { background: var(--border); color: var(--text); }
   input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
   #status { color: var(--muted); min-height: 1.45em; }
   #hub .spacer { flex: 1; }
@@ -142,6 +146,37 @@
     width: 100%; padding: 9px 10px; font: inherit; color: var(--text);
     background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
   }
+  #hub header .buttons { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .tile { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .tile.dragging {
+    z-index: 5; pointer-events: none; border-color: var(--accent);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+  }
+  .compat { font-size: 12px; font-weight: 600; }
+  .compat.good { color: #3fb950; }
+  .compat.partly { color: #d29922; }
+  .compat.untested { color: var(--muted); }
+  button.link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font-size: inherit; }
+  button.danger { color: #e5534b; border-color: #e5534b; }
+  #whats-new .row { display: flex; align-items: center; gap: 10px; }
+  #whats-new .row .grow { flex: 1; color: var(--muted); font-size: 13px; }
+  #whats-new ul { margin: 8px 0 0; padding-left: 20px; }
+  .overlay {
+    position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.55);
+    display: flex; align-items: center; justify-content: center; padding: 16px;
+  }
+  .sheet { width: 100%; max-width: 360px; max-height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+  .sheet button { width: 100%; padding: 10px 14px; }
+  .info-head { display: flex; gap: 12px; align-items: center; }
+  .info-head .icon {
+    width: 60px; height: 60px; border-radius: 14px; overflow: hidden; flex: none;
+    display: flex; align-items: center; justify-content: center; color: #fff; font-size: 22px; font-weight: 700;
+  }
+  .info-head .icon img { width: 100%; height: 100%; display: block; }
+  .info-head h3 { margin: 0 0 2px; font-size: 18px; overflow-wrap: anywhere; }
+  #info-details { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 14px; }
+  #info-details dt { color: var(--muted); }
+  #info-details dd { margin: 0; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
@@ -151,8 +186,20 @@
         <h1>pocket-hle</h1>
         <p>Old iPhone games, running in your browser.</p>
       </div>
-      <button class="small" id="update" type="button">Update</button>
+      <div class="buttons">
+        <button class="small" id="theme" type="button" aria-label="Theme">◐ Auto</button>
+        <button class="small" id="update" type="button">Update</button>
+      </div>
     </header>
+
+    <div class="panel" id="whats-new" hidden>
+      <div class="row">
+        <strong>What's new</strong>
+        <span class="grow" id="whats-new-version"></span>
+        <button class="small" id="whats-new-close" type="button">Got it</button>
+      </div>
+      <ul id="whats-new-list"></ul>
+    </div>
 
     <h2>Your games</h2>
     <div id="library">
@@ -174,8 +221,29 @@
       </div>
       <pre id="log" hidden></pre>
     </div>
-    <footer>Games are app files (.ipa) that you add yourself. They and your saved progress stay in this browser on this device; nothing is uploaded.</footer>
+    <footer>Games are app files (.ipa) that you add yourself. They and your saved progress stay in this browser on this device; nothing is uploaded.<br>
+      <span id="version"></span> · <button class="link" id="show-whats-new" type="button">What's new</button>
+      · Hold a game to drag it elsewhere.</footer>
   </main>
+
+  <!-- Details of a game, opened with its ⋯ button. -->
+  <div id="info" class="overlay" hidden>
+    <div class="panel sheet" role="dialog" aria-modal="true" aria-labelledby="info-title">
+      <div class="info-head">
+        <span class="icon" id="info-icon"></span>
+        <div>
+          <h3 id="info-title"></h3>
+          <div class="compat" id="info-compat"></div>
+        </div>
+      </div>
+      <dl id="info-details"></dl>
+      <button class="primary" id="info-play" type="button">Play</button>
+      <button class="small" id="info-rename" type="button">Rename</button>
+      <button class="small" id="info-reset" type="button">Reset progress</button>
+      <button class="small danger" id="info-remove" type="button">Remove from this device</button>
+      <button class="small" id="info-close" type="button">Close</button>
+    </div>
+  </div>
 
   <div id="game">
     <canvas id="canvas" width="480" height="320" tabindex="0"></canvas>
@@ -506,6 +574,27 @@ var Module = {
   },
 };
 
+// Tilt: the phone's motion sensor, for games that use the accelerometer (see
+// the web_motion module in src/window.rs). iPhone OS reports it in g,
+// pointing towards the ground. Browsers report m/s²; Android pointing away
+// from the ground, iPhones and iPads towards it.
+let motion = null;
+const motionSign = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) ? 1 : -1;
+window.addEventListener('devicemotion', (event) => {
+  const a = event.accelerationIncludingGravity;
+  if (!a || a.x === null || a.y === null || a.z === null) return;
+  motion = [a.x, a.y, a.z].map((value) => (motionSign * value / 9.80665).toFixed(4)).join(',');
+});
+// iPhones and iPads only report motion after asking, which has to happen
+// while handling a tap.
+function requestMotion() {
+  if (typeof DeviceMotionEvent !== 'undefined' && DeviceMotionEvent.requestPermission) {
+    DeviceMotionEvent.requestPermission().catch(() => {});
+  }
+}
+Module.pocketHleMotion = () => motion || '';
+
 // Saved data. touchHLE keeps each app's files (its "sandbox") in this folder.
 // Here it is backed by IndexedDB, so that it survives closing the page. It
 // stays in this browser on this device.
@@ -513,6 +602,7 @@ const SAVES_DIR = '/touchHLE_sandbox';
 let savesMounted = false;
 let savesSyncing = false;
 function loadSaves() {
+  if (savesMounted) return Promise.resolve();
   return new Promise((resolve) => {
     try { Module.FS.mkdir(SAVES_DIR); } catch (e) { /* already exists */ }
     try {
@@ -589,13 +679,21 @@ async function listApps() {
       // Entries by an earlier version of this page are all under the key
       // "last"; a file added again since then takes precedence.
       if (!apps.has(cursor.value.name) || cursor.key !== 'last') {
-        apps.set(cursor.value.name, { key: cursor.key, icon: cursor.value.icon });
+        const value = cursor.value;
+        apps.set(value.name, {
+          key: cursor.key, name: value.name, icon: value.icon, title: value.title,
+          customTitle: value.customTitle, version: value.version, bundleId: value.bundleId,
+          size: value.bytes && value.bytes.size,
+        });
       }
       cursor.continue();
     };
   });
-  return [...apps].map(([name, info]) => ({ name, key: info.key, icon: info.icon }))
-    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  // In the order the player arranged them; games not arranged yet go last.
+  const order = savedOrder();
+  const rank = (app) => { const i = order.indexOf(app.key); return i < 0 ? Infinity : i; };
+  return [...apps.values()].sort((a, b) => rank(a) - rank(b) ||
+    appTitle(a).localeCompare(appTitle(b), undefined, { sensitivity: 'base' }));
 }
 
 // App icons, read from the app file itself. An .ipa is a zip file; only the
@@ -718,73 +816,385 @@ async function appIcon(blob) {
   canvas.getContext('2d').drawImage(bitmap, 0, 0, 144, 144);
   return canvas.toDataURL('image/png');
 }
-async function fillMissingIcons(apps) {
-  let found = false;
+// The app's settings file (Info.plist), which is a property list either in
+// Apple's binary format or in XML. Only what is needed here is read.
+function parseBinaryPlist(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const trailer = bytes.length - 32;
+  const offsetSize = bytes[trailer + 6], refSize = bytes[trailer + 7];
+  const top = Number(view.getBigUint64(trailer + 16));
+  const tableOffset = Number(view.getBigUint64(trailer + 24));
+  const readUint = (pos, size) => {
+    let value = 0;
+    for (let i = 0; i < size; i++) value = value * 256 + bytes[pos + i];
+    return value;
+  };
+  const parse = (ref, depth) => {
+    const pos = readUint(tableOffset + ref * offsetSize, offsetSize);
+    const marker = bytes[pos], type = marker >> 4, info = marker & 15;
+    let p = pos + 1;
+    const length = () => {
+      if (info !== 15) return info;
+      const size = 1 << (bytes[p] & 15);
+      const value = readUint(p + 1, size);
+      p += 1 + size;
+      return value;
+    };
+    if (type === 0) return info === 9 ? true : info === 8 ? false : null;
+    if (type === 1) return readUint(p, 1 << info);
+    if (type === 5) { const n = length(); return new TextDecoder('latin1').decode(bytes.subarray(p, p + n)); }
+    if (type === 6) {
+      const n = length();
+      let text = '';
+      for (let i = 0; i < n; i++) text += String.fromCharCode(view.getUint16(p + 2 * i));
+      return text;
+    }
+    if (depth > 4) return null;
+    if (type === 10) {
+      const n = length();
+      return Array.from({ length: n }, (_, i) => parse(readUint(p + i * refSize, refSize), depth + 1));
+    }
+    if (type === 13) {
+      const n = length();
+      const dict = {};
+      for (let i = 0; i < n; i++) {
+        const key = parse(readUint(p + i * refSize, refSize), depth + 1);
+        dict[key] = parse(readUint(p + (n + i) * refSize, refSize), depth + 1);
+      }
+      return dict;
+    }
+    return null;
+  };
+  return parse(top, 0) || {};
+}
+function parseXmlPlist(text) {
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  const dict = doc.querySelector('plist > dict');
+  const result = {};
+  if (!dict) return result;
+  const children = [...dict.children];
+  for (let i = 0; i + 1 < children.length; i += 2) {
+    if (children[i].tagName === 'key') result[children[i].textContent] = children[i + 1].textContent;
+  }
+  return result;
+}
+// What the hub shows about a game: its icon, name, version and identifier
+// (which is also where its saved progress is kept).
+async function appDetails(blob) {
+  const details = { icon: '', title: '', version: '', bundleId: '' };
+  details.icon = await appIcon(blob).catch((e) => { log('[apps] No icon: ' + e); return ''; });
+  try {
+    const entry = (await zipEntries(blob)).find((e) => /^Payload\/[^/]+\.app\/Info\.plist$/.test(e.name));
+    if (entry) {
+      const bytes = await zipRead(blob, entry);
+      const isBinary = new TextDecoder().decode(bytes.subarray(0, 8)) === 'bplist00';
+      const plist = isBinary ? parseBinaryPlist(bytes) : parseXmlPlist(new TextDecoder().decode(bytes));
+      const text = (value) => typeof value === 'string' ? value.trim() : '';
+      details.title = text(plist.CFBundleDisplayName) || text(plist.CFBundleName);
+      details.version = text(plist.CFBundleShortVersionString) || text(plist.CFBundleVersion);
+      details.bundleId = text(plist.CFBundleIdentifier);
+    }
+  } catch (e) {
+    log('[apps] The game\'s details could not be read: ' + e);
+  }
+  return details;
+}
+// Games added by earlier versions of the hub don't have these yet.
+async function fillMissingDetails(apps) {
+  let changed = false;
   for (const app of apps) {
-    if (app.icon !== undefined) continue;
+    if (app.bundleId !== undefined) continue;
     try {
-      const entry = await appStore('readonly', (store) => store.get(app.key));
-      entry.icon = await appIcon(entry.bytes).catch((e) => {
-        log('[apps] No icon for ' + app.name + ': ' + e);
-        return '';
-      });
-      await appStore('readwrite', (store) => store.put(entry, app.key));
-      if (entry.icon) found = true;
+      await updateEntry(app.key, async (entry) => Object.assign(entry, await appDetails(entry.bytes)));
+      changed = true;
     } catch (e) {
       log('[apps] ' + e);
     }
   }
-  if (found) showLibrary();
+  if (changed) showLibrary();
+}
+async function updateEntry(key, change) {
+  const entry = await appStore('readonly', (store) => store.get(key));
+  await change(entry);
+  await appStore('readwrite', (store) => store.put(entry, key));
 }
 
-function displayName(fileName) { return fileName.replace(/\.ipa$/i, ''); }
-function tileFor(app) {
-  const title = displayName(app.name);
-  const tile = document.createElement('div');
-  tile.className = 'tile';
-  tile.tabIndex = 0;
-  tile.setAttribute('role', 'button');
-  tile.setAttribute('aria-label', 'Play ' + title);
+// How well each game is known to run. Keyed by the game's identifier.
+const COMPATIBILITY = {
+  'com.rocketcat.HookChamp': ['good', 'Plays well: levels, saves, name entry and sound.'],
+  'com.sandlotgames.iSM': ['partly', 'Menus and levels start, but the 3D track is drawn too small.'],
+  'com.sandlotgames.snailmail': ['partly', 'iPad version: gets to name entry on a computer; not yet tried in the browser.'],
+};
+const COMPAT_LABELS = { good: 'Works', partly: 'Partly works', untested: 'Not tried yet' };
+function compatibility(app) {
+  return COMPATIBILITY[app.bundleId] ||
+    ['untested', 'Nobody has tried this one yet. If it stops, use Copy log and send the log.'];
+}
 
-  // The app's own icon, or else a coloured badge with the name's initials.
-  const icon = document.createElement('span');
-  icon.className = 'icon';
+// Rearranging: hold a game for a moment, then drag it. The order is kept in
+// this browser.
+const ORDER_KEY = 'pocket-hle-order';
+function savedOrder() {
+  try { return JSON.parse(localStorage.getItem(ORDER_KEY)) || []; } catch (e) { return []; }
+}
+function saveOrder() {
+  const keys = [...libraryEl.querySelectorAll('.tile[data-key]')].map((tile) => tile.dataset.key);
+  try { localStorage.setItem(ORDER_KEY, JSON.stringify(keys)); } catch (e) { /* not kept */ }
+}
+let drag = null;
+let suppressClick = false;
+function enableDragging(tile) {
+  tile.addEventListener('contextmenu', (event) => event.preventDefault());
+  tile.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || event.target.closest('.more')) return;
+    const startX = event.clientX, startY = event.clientY;
+    const stopWaiting = () => {
+      clearTimeout(timer);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stopWaiting);
+      window.removeEventListener('pointercancel', stopWaiting);
+    };
+    // Moving before the time is up is scrolling, not dragging.
+    const move = (e) => { if (Math.hypot(e.clientX - startX, e.clientY - startY) > 10) stopWaiting(); };
+    const timer = setTimeout(() => {
+      stopWaiting();
+      const rect = tile.getBoundingClientRect();
+      drag = { tile, offsetX: startX - rect.left, offsetY: startY - rect.top };
+      tile.classList.add('dragging');
+      if (navigator.vibrate) navigator.vibrate(10);
+    }, 400);
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stopWaiting);
+    window.addEventListener('pointercancel', stopWaiting);
+  });
+}
+window.addEventListener('pointermove', (event) => {
+  if (!drag) return;
+  const tile = drag.tile;
+  const over = document.elementFromPoint(event.clientX, event.clientY);
+  const target = over && over.closest('.tile[data-key]');
+  if (target && target !== tile) {
+    const tiles = [...libraryEl.querySelectorAll('.tile[data-key]')];
+    if (tiles.indexOf(target) > tiles.indexOf(tile)) target.after(tile); else target.before(tile);
+  }
+  tile.style.transform = '';
+  const rect = tile.getBoundingClientRect();
+  tile.style.transform = 'translate(' + (event.clientX - drag.offsetX - rect.left) + 'px, ' +
+    (event.clientY - drag.offsetY - rect.top) + 'px)';
+});
+function endDrag() {
+  if (!drag) return;
+  drag.tile.classList.remove('dragging');
+  drag.tile.style.transform = '';
+  drag = null;
+  // The tap that ended the drag is not a tap on the game.
+  suppressClick = true;
+  setTimeout(() => { suppressClick = false; }, 400);
+  saveOrder();
+}
+window.addEventListener('pointerup', endDrag);
+window.addEventListener('pointercancel', endDrag);
+// While dragging, the finger must not scroll the hub.
+document.addEventListener('touchmove', (event) => { if (drag) event.preventDefault(); }, { passive: false });
+
+// The details of a game.
+const infoEl = document.getElementById('info');
+let infoApp = null;
+function openInfo(app) {
+  infoApp = app;
+  fillIcon(document.getElementById('info-icon'), app);
+  document.getElementById('info-title').textContent = appTitle(app);
+  const [level, note] = compatibility(app);
+  const compat = document.getElementById('info-compat');
+  compat.className = 'compat ' + level;
+  compat.textContent = COMPAT_LABELS[level] + '. ' + note;
+  const details = document.getElementById('info-details');
+  details.textContent = '';
+  const rows = [
+    ['Version', app.version], ['Identifier', app.bundleId], ['File', app.name],
+    ['Size', app.size ? (app.size / 1048576).toFixed(1) + ' MB' : ''],
+  ];
+  for (const [label, value] of rows) {
+    if (!value) continue;
+    const dt = document.createElement('dt');
+    dt.textContent = label;
+    const dd = document.createElement('dd');
+    dd.textContent = value;
+    details.append(dt, dd);
+  }
+  document.getElementById('info-reset').disabled = !app.bundleId;
+  infoEl.hidden = false;
+}
+function closeInfo() {
+  infoEl.hidden = true;
+  infoApp = null;
+}
+infoEl.addEventListener('click', (event) => { if (event.target === infoEl) closeInfo(); });
+document.getElementById('info-close').addEventListener('click', closeInfo);
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !infoEl.hidden) closeInfo(); });
+document.getElementById('info-play').addEventListener('click', () => {
+  const app = infoApp;
+  closeInfo();
+  launch(app);
+});
+document.getElementById('info-rename').addEventListener('click', async () => {
+  const app = infoApp;
+  const name = prompt('Name for this game (leave empty for its own name):', appTitle(app));
+  if (name === null) return;
+  await updateEntry(app.key, (entry) => { entry.customTitle = name.trim(); });
+  closeInfo();
+  showLibrary();
+});
+document.getElementById('info-reset').addEventListener('click', async () => {
+  const app = infoApp;
+  const title = appTitle(app);
+  if (!confirm('Reset all progress in ' + title + '? Its saved games and settings on this device are deleted. This cannot be undone.')) return;
+  try {
+    await resetProgress(app.bundleId);
+    setStatus('The progress in ' + title + ' was reset.');
+  } catch (e) {
+    log('[saves] ' + e);
+    setStatus('The progress could not be reset.');
+  }
+  closeInfo();
+});
+document.getElementById('info-remove').addEventListener('click', async () => {
+  const app = infoApp;
+  const title = appTitle(app);
+  if (!confirm('Remove ' + title + ' from this device? Your saved progress is kept, in case you add it again.')) return;
+  await appStore('readwrite', (store) => store.delete(app.key));
+  closeInfo();
+  await showLibrary();
+  saveOrder();
+});
+// A game's saved progress is everything in its folder in the saves.
+async function resetProgress(bundleId) {
+  await runtimeReady;
+  await loadSaves();
+  const FS = Module.FS;
+  const remove = (path) => {
+    if (FS.isDir(FS.stat(path).mode)) {
+      for (const name of FS.readdir(path)) if (name !== '.' && name !== '..') remove(path + '/' + name);
+      FS.rmdir(path);
+    } else {
+      FS.unlink(path);
+    }
+  };
+  const folder = SAVES_DIR + '/' + bundleId;
+  if (FS.analyzePath(folder).exists) remove(folder);
+  await storeSavesNow();
+}
+
+// Version and what changed in it, shown once after each update.
+const VERSION = '2026.11.15';
+const WHATS_NEW = [
+  'Tap ⋯ on a game for its details, to rename it, reset its progress or remove it.',
+  'Games show their real names, and whether they are known to work.',
+  'Hold a game for a moment, then drag it to rearrange.',
+  'Tilt controls: games that use tilting follow your phone\'s motion.',
+  'Light and dark theme switch at the top.',
+  'Snail Mail gets further (still being worked on).',
+];
+const SEEN_KEY = 'pocket-hle-seen-version';
+const whatsNewEl = document.getElementById('whats-new');
+document.getElementById('version').textContent = 'Version ' + VERSION;
+document.getElementById('whats-new-version').textContent = 'Version ' + VERSION;
+for (const text of WHATS_NEW) {
+  const item = document.createElement('li');
+  item.textContent = text;
+  document.getElementById('whats-new-list').append(item);
+}
+let seenVersion = null;
+try { seenVersion = localStorage.getItem(SEEN_KEY); } catch (e) { /* no storage */ }
+if (seenVersion !== VERSION) whatsNewEl.hidden = false;
+document.getElementById('whats-new-close').addEventListener('click', () => {
+  whatsNewEl.hidden = true;
+  try { localStorage.setItem(SEEN_KEY, VERSION); } catch (e) { /* no storage */ }
+});
+document.getElementById('show-whats-new').addEventListener('click', () => { whatsNewEl.hidden = false; });
+
+// Theme: follow the device, or always light or dark.
+const THEME_KEY = 'pocket-hle-theme';
+const THEMES = { auto: '◐ Auto', light: '☀ Light', dark: '☾ Dark' };
+const themeButton = document.getElementById('theme');
+let theme = 'auto';
+try { theme = localStorage.getItem(THEME_KEY) || 'auto'; } catch (e) { /* no storage */ }
+if (!(theme in THEMES)) theme = 'auto';
+function applyTheme() {
+  if (theme === 'auto') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  themeButton.textContent = THEMES[theme];
+  themeButton.setAttribute('aria-label', 'Theme: ' + theme);
+}
+applyTheme();
+themeButton.addEventListener('click', () => {
+  const names = Object.keys(THEMES);
+  theme = names[(names.indexOf(theme) + 1) % names.length];
+  applyTheme();
+  try { localStorage.setItem(THEME_KEY, theme); } catch (e) { /* not kept */ }
+});
+
+function displayName(fileName) { return fileName.replace(/\.ipa$/i, ''); }
+// The name the player gave the game, or its own, or its file's.
+function appTitle(app) { return app.customTitle || app.title || displayName(app.name); }
+// The app's own icon, or else a coloured badge with the name's initials.
+function fillIcon(icon, app) {
+  const title = appTitle(app);
+  icon.textContent = '';
+  icon.style.background = '';
+  if (app.icon) {
+    const img = document.createElement('img');
+    img.src = app.icon;
+    img.alt = '';
+    icon.append(img);
+    return;
+  }
   let hash = 0;
   for (const c of title) hash = (hash * 31 + c.codePointAt(0)) >>> 0;
   icon.style.background = 'hsl(' + (hash % 360) + ' 45% 42%)';
   const words = title.replace(/(\p{Ll})(\p{Lu})/gu, '$1 $2').split(/[^\p{L}\p{N}]+/u)
     .filter((w) => /^\p{L}/u.test(w));
   icon.textContent = (words.length > 1 ? words[0][0] + words[1][0] : title.slice(0, 2)).toUpperCase();
-  if (app.icon) {
-    const img = document.createElement('img');
-    img.src = app.icon;
-    img.alt = '';
-    icon.textContent = '';
-    icon.append(img);
-  }
+}
+function tileFor(app) {
+  const title = appTitle(app);
+  const tile = document.createElement('div');
+  tile.className = 'tile';
+  tile.dataset.key = app.key;
+  tile.tabIndex = 0;
+  tile.setAttribute('role', 'button');
+  tile.setAttribute('aria-label', 'Play ' + title);
+
+  const icon = document.createElement('span');
+  icon.className = 'icon';
+  fillIcon(icon, app);
 
   const name = document.createElement('span');
   name.className = 'name';
   name.textContent = title;
 
-  const remove = document.createElement('button');
-  remove.className = 'remove';
-  remove.type = 'button';
-  remove.textContent = '✕';
-  remove.setAttribute('aria-label', 'Remove ' + title);
-  remove.addEventListener('click', async (event) => {
+  const [level] = compatibility(app);
+  const compat = document.createElement('span');
+  compat.className = 'compat ' + level;
+  compat.textContent = COMPAT_LABELS[level];
+
+  const more = document.createElement('button');
+  more.className = 'more';
+  more.type = 'button';
+  more.textContent = '⋯';
+  more.setAttribute('aria-label', 'Details of ' + title);
+  more.addEventListener('click', (event) => {
     event.stopPropagation();
-    if (!confirm('Remove ' + title + ' from this device? Your saved progress is kept, in case you add it again.')) return;
-    await appStore('readwrite', (store) => store.delete(app.key));
-    showLibrary();
+    openInfo(app);
   });
 
-  const play = () => launch(app);
+  const play = () => { if (!suppressClick) launch(app); };
   tile.addEventListener('click', play);
   tile.addEventListener('keydown', (event) => {
     if (event.target === tile && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); play(); }
   });
-  tile.append(icon, name, remove);
+  enableDragging(tile);
+  tile.append(icon, name, compat, more);
   return tile;
 }
 async function showLibrary() {
@@ -796,7 +1206,7 @@ async function showLibrary() {
   }
   for (const tile of [...libraryEl.querySelectorAll('.tile:not(.add)')]) tile.remove();
   for (const app of apps) libraryEl.insertBefore(tileFor(app), addTile);
-  fillMissingIcons(apps);
+  fillMissingDetails(apps);
   return apps;
 }
 showLibrary();
@@ -812,10 +1222,10 @@ pickEl.addEventListener('change', async () => {
   try {
     // Ask the browser not to clear the library when it is short on space.
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
-    const icon = await appIcon(file).catch(() => '');
-    await appStore('readwrite', (store) => store.put({ name: file.name, bytes: file, icon }, file.name));
+    const details = await appDetails(file);
+    await appStore('readwrite', (store) => store.put({ name: file.name, bytes: file, ...details }, file.name));
     await showLibrary();
-    setStatus(displayName(file.name) + ' was added. Tap it to play.');
+    setStatus(appTitle({ name: file.name, ...details }) + ' was added. Tap it to play.');
   } catch (e) {
     log('[apps] The app file could not be kept: ' + e);
     setStatus('The file could not be kept in this browser, so it will start once now.');
@@ -828,11 +1238,12 @@ pickEl.addEventListener('change', async () => {
 async function launch(app) {
   if (started || launch.busy) return;
   launch.busy = true;
+  requestMotion();
   requestFullscreen();
   try {
     const entry = await appStore('readonly', (store) => store.get(app.key));
     const bytes = new Uint8Array(await entry.bytes.arrayBuffer());
-    await start(bytes, app.name);
+    await start(bytes, app.name, appTitle(app));
   } catch (e) {
     launch.busy = false;
     log('[apps] ' + (e && e.stack || e));
@@ -841,12 +1252,12 @@ async function launch(app) {
 }
 
 let started = false;
-async function start(bytes, name) {
+async function start(bytes, name, title = displayName(name)) {
   if (started) return;
   started = true;
   logLines.length = 0;
   document.body.classList.add('playing');
-  document.title = displayName(name) + ' – pocket-hle';
+  document.title = title + ' – pocket-hle';
   await runtimeReady;
   await loadSaves();
   Module.FS.writeFile('/app.ipa', bytes);
