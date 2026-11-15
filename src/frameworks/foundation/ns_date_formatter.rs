@@ -36,6 +36,10 @@ pub const CLASSES: ClassExports = objc_classes! {
     env.objc.borrow_mut::<NSDateFormatterHostObject>(this).date_format = Some(date_format);
 }
 
+- (())setTimeZone:(id)_time_zone { // NSTimeZone *
+    // TODO: stringFromDate: always formats in GMT at the moment.
+}
+
 - (id)stringFromDate:(id)date {
     let &NSDateFormatterHostObject {
         date_format

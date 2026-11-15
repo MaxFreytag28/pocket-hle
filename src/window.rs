@@ -1360,6 +1360,11 @@ pub fn open_url(url: &str) -> Result<(), String> {
 /// messagebox, which is not required but should be done if possible.
 pub fn show_error_messagebox(window: Option<&Window>, error_message: &str) {
     use sdl2::messagebox;
+    // For unattended test runs: the error is in the log anyway, and a modal
+    // dialog would keep the process alive until someone clicks it.
+    if std::env::var_os("TOUCHHLE_NO_CRASH_DIALOG").is_some() {
+        return;
+    }
     let mbox = [
         messagebox::ButtonData {
             flags: messagebox::MessageBoxButtonFlag::NOTHING,

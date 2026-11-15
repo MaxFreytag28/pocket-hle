@@ -831,6 +831,28 @@ pub const CLASSES: ClassExports = objc_classes! {
     }
 }
 
+- (id)stringByReplacingCharactersInRange:(NSRange)range
+                              withString:(id)replacement { // NSString*
+    // TODO: raise NSRangeException if the range is out of bounds
+    let end = range.location + range.length;
+    let mut before: Utf16String = Vec::new();
+    let mut after: Utf16String = Vec::new();
+    for_each_code_unit(env, this, |idx, c| {
+        if idx < range.location {
+            before.push(c);
+        } else if idx >= end {
+            after.push(c);
+        }
+    });
+    let mut res_utf16 = before;
+    for_each_code_unit(env, replacement, |_, c| res_utf16.push(c));
+    res_utf16.extend(after);
+
+    let res = msg_class![env; _touchHLE_NSString alloc];
+    *env.objc.borrow_mut(res) = StringHostObject::Utf16(res_utf16);
+    autorelease(env, res)
+}
+
 - (id)stringByReplacingOccurrencesOfString:(id)target // NSString*
                                 withString:(id)replacement { // NSString*
     // TODO: support foreign subclasses (perhaps via a helper function that

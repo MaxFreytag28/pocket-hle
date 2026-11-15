@@ -23,6 +23,7 @@ pub mod errno;
 pub mod ifaddrs;
 pub mod keymgr;
 pub mod libkern;
+pub mod libxml2;
 pub mod mach;
 pub mod math;
 pub mod mmap;
@@ -34,6 +35,7 @@ pub mod sched;
 pub mod semaphore;
 pub mod setjmp;
 pub mod signal;
+pub mod sqlite3;
 pub mod stdio;
 pub mod stdlib;
 pub mod string;
@@ -115,4 +117,6 @@ pub struct State {
     errno: errno::State,
     clocale: clocale::State,
     mmap: mmap::State,
+    sqlite3: sqlite3::State,
+    libxml2: libxml2::State,
 }

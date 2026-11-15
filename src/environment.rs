@@ -1082,6 +1082,8 @@ impl Environment {
             };
             let mut step_and_debug = false;
             while ticks > 0 {
+                let ticks_before = ticks;
+                let cpu_started = tick_stats::start();
                 let state = self.cpu.run_or_step(
                     &mut self.mem,
                     if step_and_debug {
@@ -1090,6 +1092,7 @@ impl Environment {
                         Some(&mut ticks)
                     },
                 );
+                tick_stats::record(ticks_before - ticks, cpu_started);
                 match self.handle_cpu_state(state, initial_thread, root) {
                     ThreadNextAction::Continue => {
                         if step_and_debug {
@@ -1451,5 +1454,53 @@ mod dylib_sorting_tests {
             result.is_err(),
             "Sort should detect self-dependency as a cycle and return an error"
         );
+    }
+}
+
+/// Optional measurement of how much guest CPU work an app needs: with the
+/// `TOUCHHLE_TICK_STATS` environment variable set, the number of ticks
+/// (roughly, guest instructions) executed per second of real time is logged
+/// every few seconds.
+mod tick_stats {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Instant;
+
+    static TOTAL: AtomicU64 = AtomicU64::new(0);
+    /// Nanoseconds spent inside the CPU backend.
+    static CPU_NANOS: AtomicU64 = AtomicU64::new(0);
+    static LAST: Mutex<Option<(Instant, u64, u64)>> = Mutex::new(None);
+
+    fn enabled() -> bool {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| std::env::var_os("TOUCHHLE_TICK_STATS").is_some())
+    }
+
+    pub fn start() -> Option<Instant> {
+        enabled().then(Instant::now)
+    }
+
+    pub fn record(ticks: u64, started: Option<Instant>) {
+        let Some(started) = started else {
+            return;
+        };
+        let now = Instant::now();
+        let nanos = now.duration_since(started).as_nanos() as u64;
+        let cpu_nanos = CPU_NANOS.fetch_add(nanos, Ordering::Relaxed) + nanos;
+        let total = TOTAL.fetch_add(ticks, Ordering::Relaxed) + ticks;
+        let mut last = LAST.lock().unwrap();
+        let (last_time, last_total, last_cpu_nanos) = *last.get_or_insert((now, total, cpu_nanos));
+        let elapsed = now.duration_since(last_time).as_secs_f64();
+        if elapsed >= 2.0 {
+            let ticks = (total - last_total) as f64;
+            let cpu_seconds = (cpu_nanos - last_cpu_nanos) as f64 / 1e9;
+            echo!(
+                "tick_stats: {:.1} million ticks/s used, backend capacity {:.0} million ticks/s ({:.0}% of real time spent in the CPU backend)",
+                ticks / elapsed / 1e6,
+                ticks / cpu_seconds.max(1e-9) / 1e6,
+                cpu_seconds / elapsed * 100.0
+            );
+            *last = Some((now, total, cpu_nanos));
+        }
     }
 }

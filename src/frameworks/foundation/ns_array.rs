@@ -391,6 +391,12 @@ pub const CLASSES: ClassExports = objc_classes! {
     autorelease(env, new)
 }
 
+- (id)sortedArrayUsingDescriptors:(id)descriptors { // NSArray*
+    let new = msg![env; this mutableCopy];
+    () = msg![env; new sortUsingDescriptors:descriptors];
+    autorelease(env, new)
+}
+
 @end
 
 // Special variant for use by CFArray with NULL callbacks: objects aren't
@@ -504,6 +510,35 @@ pub const CLASSES: ClassExports = objc_classes! {
         },
     );
     let (env, _) = user_data;
+    env.objc.borrow_mut::<ArrayHostObject>(this).array = array;
+}
+
+- (())sortUsingDescriptors:(id)descriptors { // NSArray*
+    let descriptor_count: NSUInteger = msg![env; descriptors count];
+    let mut descriptor_list = Vec::new();
+    for i in 0..descriptor_count {
+        let descriptor: id = msg![env; descriptors objectAtIndex:i];
+        descriptor_list.push(descriptor);
+    }
+
+    let host_object: &mut ArrayHostObject = env.objc.borrow_mut(this);
+    let mut array = std::mem::take(&mut host_object.array);
+    // Insertion sort: this sort has to be stable, and the comparison needs
+    // access to the environment.
+    for i in 1..array.len() {
+        let mut j = i;
+        while j > 0
+            && super::ns_sort_descriptor::compare_using_descriptors(
+                env,
+                &descriptor_list,
+                array[j - 1],
+                array[j],
+            ) > 0
+        {
+            array.swap(j - 1, j);
+            j -= 1;
+        }
+    }
     env.objc.borrow_mut::<ArrayHostObject>(this).array = array;
 }
 

@@ -27,8 +27,12 @@ name = "touchHLE"
 path = "src/bin.rs"
 
 [features]
-default = ["static"]
+default = ["static", "jit"]
 static = ["sdl2/bundled", "sdl2/static-link", "touchHLE_openal_soft_wrapper/static"]
+# The dynarmic CPU backend (a dynamic recompiler, written in C++). Without
+# this, only the portable interpreter backend is available. That is the only
+# option on platforms where code can't be generated at runtime.
+jit = ["dep:touchHLE_dynarmic_wrapper"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -54,6 +58,9 @@ quick-xml = "0.38.4"
 md5 = "0.7.0"
 yore = "1.1.0"
 encoding_rs = "0.8.35"
+# Host SQLite backing our libsqlite3 implementation. "bundled" compiles SQLite
+# from source so the build doesn't depend on a system copy.
+libsqlite3-sys = { version = "0.30", features = ["bundled"] }
 # We currently use a fork of rust-sdl2 because we need a fix for Android builds
 # that's not upstream yet.
 # The HIDAPI feature is enabled because rust-sdl2 hides the SDL2 sensor features
@@ -62,7 +69,7 @@ encoding_rs = "0.8.35"
 # SDL2 that rust-sdl2 uses, so that the Android JNI interface matches.
 sdl2 = { git = "https://github.com/touchHLE/rust-sdl2", tag = "touchHLE-3", features = ["hidapi"] }
 sdl2-sys = { git = "https://github.com/touchHLE/rust-sdl2", tag = "touchHLE-3" }
-touchHLE_dynarmic_wrapper = { path = "src/cpu/dynarmic_wrapper" }
+touchHLE_dynarmic_wrapper = { path = "src/cpu/dynarmic_wrapper", optional = true }
 touchHLE_gl_bindings = { path = "src/gles/gl_bindings" }
 touchHLE_openal_soft_wrapper = { path = "src/audio/openal_soft_wrapper" }
 touchHLE_pvrt_decompress_wrapper = { path = "src/image/pvrt_decompress_wrapper" }

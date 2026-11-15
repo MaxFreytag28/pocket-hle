@@ -17,6 +17,69 @@ use crate::mem::{ConstPtr, MutVoidPtr, SafeRead};
 use crate::Environment;
 use std::any::TypeId;
 
+/// Send `+initialize` to the class of `receiver` (or to `receiver` itself, if it
+/// is a class) and its superclasses, if that has not happened yet. The real
+/// runtime does this lazily, just before the first message is delivered to a
+/// class or one of its instances, and apps rely on it to set up global state.
+///
+/// Unlike the real runtime, a class that does not implement `+initialize`
+/// itself does not get its superclass's implementation called a second time.
+fn ensure_class_initialized(env: &mut Environment, receiver: id) {
+    fn class_info(env: &Environment, class: Class) -> Option<&super::ClassHostObject> {
+        env.objc
+            .get_host_object(class)
+            .and_then(|host_object| host_object.as_any().downcast_ref())
+    }
+
+    let isa = ObjC::read_isa(receiver, &env.mem);
+    let class = match class_info(env, isa) {
+        Some(isa_info) if isa_info.is_metaclass => receiver,
+        Some(_) => isa,
+        None => return,
+    };
+    if env.objc.initialized_classes.contains(&class) {
+        return;
+    }
+
+    // Superclasses must be initialized first.
+    let mut chain = Vec::new();
+    let mut current = class;
+    while current != nil && !env.objc.initialized_classes.contains(&current) {
+        let Some(info) = class_info(env, current) else {
+            break;
+        };
+        chain.push(current);
+        current = info.superclass;
+    }
+
+    let selector = env.objc.lookup_selector("initialize");
+    for &class in chain.iter().rev() {
+        // Mark it first: +initialize usually sends messages to its own class.
+        if !env.objc.initialized_classes.insert(class) {
+            continue;
+        }
+        let Some(selector) = selector else {
+            continue;
+        };
+        let metaclass = ObjC::read_isa(class, &env.mem);
+        let implements_it = class_info(env, metaclass)
+            .is_some_and(|info| matches!(info.methods.get(&selector), Some(IMP::Guest(_))));
+        if !implements_it {
+            continue;
+        }
+        log_dbg!(
+            "Sending +initialize to {:?} ({})",
+            class,
+            env.objc.get_class_name(class)
+        );
+        // We are in the middle of an objc_msgSend call, so the registers hold
+        // the arguments of the message that is waiting to be delivered.
+        let saved_regs = *env.cpu.regs();
+        let _: () = msg_send(env, (class, selector));
+        *env.cpu.regs_mut() = saved_regs;
+    }
+}
+
 /// The core implementation of `objc_msgSend`, the main function of Objective-C.
 ///
 /// Note that while only two parameters (usually receiver and selector) are
@@ -39,6 +102,8 @@ fn objc_msgSend_inner(env: &mut Environment, receiver: id, selector: SEL, super2
         env.cpu.regs_mut()[0..2].fill(0);
         return;
     }
+
+    ensure_class_initialized(env, receiver);
 
     let orig_class = super2.unwrap_or_else(|| ObjC::read_isa(receiver, &env.mem));
     assert!(orig_class != nil);

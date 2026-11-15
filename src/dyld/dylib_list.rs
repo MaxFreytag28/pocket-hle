@@ -13,6 +13,8 @@ use crate::objc;
 /// searches through.
 pub const DYLIB_LIST: &[&super::HostDylib] = &[
     &libc::DYLIB,
+    &libc::sqlite3::DYLIB,
+    &libc::libxml2::DYLIB,
     &objc::DYLIB,
     &crate::app_picker::DYLIB, // Not a real library; special internal classes.
     &frameworks::audio_toolbox::DYLIB,

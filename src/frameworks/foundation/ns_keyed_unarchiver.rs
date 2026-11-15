@@ -250,6 +250,11 @@ fn get_value_to_decode_for_key(env: &mut Environment, unarchiver: id, key: id) -
 /// The object returned is retained only by the archiver. Remember to retain and
 /// possibly autorelease it as appropriate.
 fn unarchive_key(env: &mut Environment, unarchiver: id, key: Uid) -> id {
+    // The first object is always the string "$null", which stands for nil.
+    if key.get() == 0 {
+        return nil;
+    }
+
     let host_obj = borrow_host_obj(env, unarchiver);
     if let Some(existing) = host_obj.already_unarchived[key.get() as usize] {
         return existing;
@@ -315,6 +320,16 @@ fn unarchive_key(env: &mut Environment, unarchiver: id, key: Uid) -> id {
             } else {
                 unreachable!(); // according to plist crate docs
             }
+        }
+        Value::Real(real) => {
+            let real: f64 = *real;
+            let number: id = msg_class![env; NSNumber numberWithDouble:real];
+            retain(env, number)
+        }
+        Value::Boolean(boolean) => {
+            let boolean: bool = *boolean;
+            let number: id = msg_class![env; NSNumber numberWithBool:boolean];
+            retain(env, number)
         }
         _ => unimplemented!("Unarchive: {:#?}", item),
     };

@@ -31,3 +31,12 @@ android/build
 # Default developer dump file
 
 DUMP.txt
+
+# Local development leftovers (pocket-hle)
+
+/target-*/
+/checkpoints/
+/*.log
+/*.png
+/*.exe
+/*.bat

@@ -34,6 +34,12 @@ pub const CLASSES: ClassExports = objc_classes! {
     autorelease(env, new)
 }
 
++ (id)timeZoneWithAbbreviation:(id)abbreviation { // NSString *
+    // TODO: map the abbreviation to a real time zone. Since secondsFromGMT
+    // doesn't respect the time zone yet, this makes no difference so far.
+    msg![env; this timeZoneWithName:abbreviation]
+}
+
 + (id)localTimeZone {
     // As reported by the Aspen Simulator
     let tz_name: id = ns_string::get_static_str(env, "Canada/Eastern");

@@ -126,12 +126,9 @@ impl ClassHostObject {
             let method_ptr: ConstPtr<method_t> =
                 Ptr::from_bits(methods_base_ptr.to_bits() + i * entsize);
 
-            // TODO: support type strings
-            let method_t {
-                name,
-                types: _,
-                imp,
-            } = mem.read(method_ptr);
+            let method_t { name, types, imp } = mem.read(method_ptr);
+            objc.guest_method_types
+                .insert(imp.addr_with_thumb_bit(), types);
 
             // There is no guarantee this string is unique or known.
             // We must deduplicate it like any other.
@@ -142,6 +139,33 @@ impl ClassHostObject {
 }
 
 impl ObjC {
+    /// Get the first character of the return type encoding of the method that
+    /// objects of `class` would use for `sel`, e.g. `b'i'` for `int`. Only
+    /// known for methods defined by the app.
+    pub fn method_return_type(&self, mem: &Mem, class: Class, sel: SEL) -> Option<u8> {
+        let mut class = class;
+        loop {
+            let &ClassHostObject {
+                superclass,
+                ref methods,
+                ..
+            } = self.borrow(class);
+            match methods.get(&sel) {
+                Some(IMP::Guest(imp)) => {
+                    let types = *self.guest_method_types.get(&imp.addr_with_thumb_bit())?;
+                    return mem
+                        .cstr_at(types)
+                        .iter()
+                        .copied()
+                        .find(|c| !b"rnNoORV".contains(c));
+                }
+                Some(IMP::Host(_)) => return None,
+                None if superclass == nil => return None,
+                None => class = superclass,
+            }
+        }
+    }
+
     /// Checks if the provided class has a method in its class chain (that is
     /// to say, objects of the given class respond to a selector).
     pub fn class_has_method(&self, class: Class, sel: SEL) -> bool {

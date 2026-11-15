@@ -80,6 +80,14 @@ pub struct ObjC {
     /// Type information isn't part of the `objc_msgSend` ABI, so an alternative
     /// channel is needed.
     message_type_info: Option<(std::any::TypeId, &'static str)>,
+
+    /// Classes that have already been sent `+initialize` (or that were checked
+    /// and do not need it). See `messages.rs`.
+    initialized_classes: std::collections::HashSet<Class>,
+
+    /// Type encoding strings of methods defined by the app, keyed by the
+    /// address of the implementation.
+    guest_method_types: HashMap<u32, crate::mem::ConstPtr<u8>>,
 }
 
 impl ObjC {
@@ -90,6 +98,8 @@ impl ObjC {
             classes: HashMap::new(),
             sync_mutexes: HashMap::new(),
             message_type_info: None,
+            initialized_classes: std::collections::HashSet::new(),
+            guest_method_types: HashMap::new(),
         }
     }
 }

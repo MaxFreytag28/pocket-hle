@@ -121,10 +121,16 @@ pub const CLASSES: ClassExports = objc_classes! {
     this == other
 }
 
-// TODO: description and debugDescription (both the instance and class method).
-// This is not hard to add, but before adding a fallback implementation of it,
-// we should make sure all the Foundation classes' overrides of it are there,
-// to prevent weird behavior.
+// Fallback implementation, same format as the real NSObject: <ClassName: 0x...>
+// TODO: debugDescription and the class method versions.
+// FIXME: Not all the Foundation classes' overrides of this exist yet, so some
+// of them will get this fallback where the real OS prints their content.
+- (id)description {
+    let class: Class = ObjC::read_isa(this, &env.mem);
+    let desc = format!("<{}: {:#x}>", env.objc.get_class_name(class), this.to_bits());
+    let desc = from_rust_string(env, desc);
+    msg![env; desc autorelease]
+}
 // TODO: localized description methods also? (not sure if NSObject has them)
 
 // Helper for NSCopying
@@ -199,6 +205,67 @@ pub const CLASSES: ClassExports = objc_classes! {
     // may provide key-specific behavior.
     let sel = env.objc.lookup_selector("setValue:forUndefinedKey:").unwrap();
     () = msg_send(env, (this, sel, value, key));
+}
+
+- (id)valueForKey:(id)key { // NSString*
+    let key_string = to_rust_string(env, key).to_string();
+    assert!(!key_string.is_empty() && key_string.is_ascii());
+    let camel_case_key_string = format!("{}{}", key_string.as_bytes()[0].to_ascii_uppercase() as char, &key_string[1..]);
+    let class: Class = ObjC::read_isa(this, &env.mem);
+
+    // Look for an accessor named get<Key>, <key> or is<Key>, in that order.
+    // Non-object results are wrapped in an NSNumber.
+    for accessor in [format!("get{camel_case_key_string}"), key_string.clone(), format!("is{camel_case_key_string}")] {
+        let Some(sel) = env.objc.lookup_selector(&accessor) else {
+            continue;
+        };
+        if !env.objc.class_has_method(class, sel) {
+            continue;
+        }
+        // The type is only known for methods defined by the app. Host methods
+        // used as accessors are assumed to return objects.
+        return match env.objc.method_return_type(&env.mem, class, sel) {
+            None | Some(b'@') | Some(b'#') => msg_send(env, (this, sel)),
+            Some(b'c') | Some(b'C') | Some(b'B') => {
+                let value: bool = msg_send(env, (this, sel));
+                msg_class![env; NSNumber numberWithBool:value]
+            }
+            Some(b'i') | Some(b'l') | Some(b's') | Some(b'I') | Some(b'L') | Some(b'S') => {
+                let value: i32 = msg_send(env, (this, sel));
+                msg_class![env; NSNumber numberWithInt:value]
+            }
+            Some(b'q') | Some(b'Q') => {
+                let value: i64 = msg_send(env, (this, sel));
+                msg_class![env; NSNumber numberWithLongLong:value]
+            }
+            Some(b'f') => {
+                let value: f32 = msg_send(env, (this, sel));
+                msg_class![env; NSNumber numberWithFloat:value]
+            }
+            Some(b'd') => {
+                let value: f64 = msg_send(env, (this, sel));
+                msg_class![env; NSNumber numberWithDouble:value]
+            }
+            Some(other) => unimplemented!(
+                "valueForKey:{:?}: accessor {} returns unsupported type {:?}",
+                key_string, accessor, other as char
+            ),
+        };
+    }
+
+    // TODO: Non-object instance variables. For now the variable is assumed to
+    // hold an object, like setValue:forKey: above does.
+    if let Some(ivar_ptr) = env.objc.object_lookup_ivar(&env.mem, this, &format!("_{key_string}"))
+        .or_else(|| env.objc.object_lookup_ivar(&env.mem, this, &format!("_is{camel_case_key_string}")))
+        .or_else(|| env.objc.object_lookup_ivar(&env.mem, this, &key_string))
+        .or_else(|| env.objc.object_lookup_ivar(&env.mem, this, &format!("is{camel_case_key_string}"))
+    ) {
+        return env.mem.read(ivar_ptr.cast::<id>());
+    }
+
+    // TODO: valueForUndefinedKey:, which raises NSUnknownKeyException.
+    let class_name_string = env.objc.get_class_name(class).to_owned();
+    panic!("Object {:?} of class {:?} has no value for key {:?}", this, class_name_string, key_string);
 }
 
 - (())setValue:(id)_value
