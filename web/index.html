@@ -55,6 +55,8 @@
       max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
     display: flex; flex-direction: column; gap: 16px;
   }
+  #hub header { display: flex; align-items: flex-start; gap: 12px; }
+  #hub header .grow { flex: 1; min-width: 0; }
   #hub header h1 { font-size: 22px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
   #hub header p { margin: 2px 0 0; color: var(--muted); }
   #hub h2 {
@@ -142,8 +144,11 @@
 <body>
   <main id="hub">
     <header>
-      <h1>pocket-hle</h1>
-      <p>Old iPhone games, running in your browser.</p>
+      <div class="grow">
+        <h1>pocket-hle</h1>
+        <p>Old iPhone games, running in your browser.</p>
+      </div>
+      <button class="small" id="update" type="button">Update</button>
     </header>
 
     <h2>Your games</h2>
@@ -307,6 +312,37 @@ function watchScreenShape() {
   update();
 }
 watchScreenShape();
+
+// Get the newest version of the page and emulator. Everything is normally
+// fetched fresh when online, but browsers may still reuse a copy for a while;
+// this asks for each file again, bypassing that, and then reloads. The service
+// worker keeps the new copies for offline use. Games and saves are untouched.
+const updateButton = document.getElementById('update');
+updateButton.addEventListener('click', async () => {
+  if (!navigator.onLine) {
+    setStatus('You are offline. Connect to the internet to update.');
+    return;
+  }
+  updateButton.disabled = true;
+  updateButton.textContent = 'Updating…';
+  try {
+    if ('serviceWorker' in navigator) {
+      const registration = await navigator.serviceWorker.getRegistration();
+      if (registration) await registration.update().catch(() => {});
+    }
+    const files = ['./', 'index.html', 'touchHLE.js', 'touchHLE.wasm', 'touchHLE.data',
+      'manifest.webmanifest', 'sw.js', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
+    const results = await Promise.all(files.map((file) =>
+      fetch(file, { cache: 'reload' }).then((response) => response.ok, () => false)));
+    if (results.every((ok) => !ok)) throw new Error('nothing could be fetched');
+    location.reload();
+  } catch (e) {
+    log('[update] ' + e);
+    setStatus('The update failed. Try again later.');
+    updateButton.disabled = false;
+    updateButton.textContent = 'Update';
+  }
+});
 
 // The menu over a running game. `message` is set when the game has stopped.
 function showGameMenu(message) {
