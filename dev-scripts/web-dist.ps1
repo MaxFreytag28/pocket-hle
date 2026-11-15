@@ -20,7 +20,7 @@ $data = Get-ChildItem "$release\build\touchHLE" -Recurse -Filter touchHLE.data |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $data) { throw 'touchHLE.data not found; did the web build succeed?' }
 Copy-Item $data.FullName $Out -Force
-Copy-Item web\index.html $Out -Force
+Copy-Item web\* $Out -Force
 if ($TestApp) { Copy-Item $TestApp (Join-Path $Out 'test-app.ipa') -Force }
 
 Get-ChildItem $Out | ForEach-Object { '{0,12:N0}  {1}' -f $_.Length, $_.Name }

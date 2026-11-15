@@ -134,7 +134,9 @@ pub fn main() {
         link_arg("-sFORCE_FILESYSTEM=1");
         link_arg("-sINVOKE_RUN=0");
         link_arg("-sEXIT_RUNTIME=0");
-        link_arg("-sEXPORTED_RUNTIME_METHODS=callMain,FS");
+        link_arg("-sEXPORTED_RUNTIME_METHODS=callMain,FS,IDBFS");
+        // The page keeps apps' saved data in the browser's IndexedDB.
+        link_arg("-lidbfs.js");
         link_arg("-sENVIRONMENT=web");
 
         // Files touchHLE needs at runtime, packaged next to the program.

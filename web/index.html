@@ -9,6 +9,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>pocket-hle</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#14161a">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
   :root {
     --bg: #14161a; --panel: #1e2127; --text: #e6e8ec; --muted: #9aa1ad;
@@ -32,8 +39,17 @@
      element to attach its mouse, touch and keyboard listeners to. */
   #canvas {
     background: #000; border: 1px solid var(--border); border-radius: 6px;
-    max-width: 100%; height: auto; image-rendering: pixelated; touch-action: none;
+    /* Fill the width that is available, up to twice the size of the original
+       screen, and never taller than the window. */
+    width: min(100%, 960px, calc((100vh - 24px) * 1.5)); height: auto; aspect-ratio: 3 / 2;
+    image-rendering: pixelated; touch-action: none;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
   }
+  button.pick {
+    padding: 9px 16px; border: 0; border-radius: 6px; cursor: pointer; margin-right: 8px;
+    background: var(--accent); color: #fff; font: inherit; font-weight: 600;
+  }
+  label.pick.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
   .panel {
     background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
     padding: 12px 14px; width: 100%; max-width: 640px;
@@ -72,8 +88,9 @@
   </div>
 
   <div class="panel">
+    <button class="pick" id="play-again" hidden></button>
     <label class="pick" id="pick-label" aria-disabled="true">
-      Choose app file
+      <span id="pick-text">Choose app file</span>
       <input type="file" id="pick" accept=".ipa,application/octet-stream" disabled>
     </label>
     <div id="status">Loading the emulator…</div>
@@ -90,6 +107,7 @@ const statusEl = document.getElementById('status');
 const logEl = document.getElementById('log');
 const pickEl = document.getElementById('pick');
 const pickLabel = document.getElementById('pick-label');
+const playAgainEl = document.getElementById('play-again');
 
 // Everything the emulator prints, most recent last. Kept on `window` so it
 // can be inspected from the developer console.
@@ -148,6 +166,16 @@ if (params.has('debug')) {
   HTMLCanvasElement.prototype.getContext = function (type, attributes) {
     return getContext.call(this, type, Object.assign({}, attributes, { preserveDrawingBuffer: true }));
   };
+  // Keep track of the audio outputs the emulator opens, so their state can be
+  // inspected (window.pocketHleAudio).
+  window.pocketHleAudio = [];
+  for (const name of ['AudioContext', 'webkitAudioContext']) {
+    const Original = window[name];
+    if (!Original) continue;
+    window[name] = class extends Original {
+      constructor(...args) { super(...args); window.pocketHleAudio.push(this); }
+    };
+  }
   // Send the current frame to the development server (dev-scripts/web-serve.py),
   // which saves it as <name>.png.
   window.pocketHleShot = async (name) => {
@@ -198,11 +226,23 @@ var Module = {
     return text;
   },
   setStatus: (text) => { if (text) setStatus(text); },
-  onRuntimeInitialized: () => {
+  onRuntimeInitialized: async () => {
     pickEl.disabled = false;
     pickLabel.setAttribute('aria-disabled', 'false');
     setStatus('Ready. Choose an app file to start.');
-    maybeAutoload();
+    if (params.has('autoload')) { maybeAutoload(); return; }
+    // Offer the app file that was used last time, if there is one.
+    const remembered = await recallApp();
+    if (remembered && !started) {
+      playAgainEl.textContent = 'Play ' + remembered.name.replace(/\.ipa$/i, '');
+      playAgainEl.hidden = false;
+      playAgainEl.onclick = async () => {
+        start(new Uint8Array(await remembered.bytes.arrayBuffer()), remembered.name);
+      };
+      pickLabel.classList.add('secondary');
+      document.getElementById('pick-text').textContent = 'Choose a different file';
+      setStatus('Ready.');
+    }
   },
   onAbort: (what) => {
     log('[aborted] ' + what);
@@ -211,13 +251,89 @@ var Module = {
   },
 };
 
+// Saved data. touchHLE keeps each app's files (its "sandbox") in this folder.
+// Here it is backed by IndexedDB, so that it survives closing the page. It
+// stays in this browser on this device.
+const SAVES_DIR = '/touchHLE_sandbox';
+let savesMounted = false;
+let savesSyncing = false;
+function loadSaves() {
+  return new Promise((resolve) => {
+    try { Module.FS.mkdir(SAVES_DIR); } catch (e) { /* already exists */ }
+    try {
+      Module.FS.mount(Module.IDBFS, {}, SAVES_DIR);
+    } catch (e) {
+      log('[saves] Saved data will not be kept: ' + e);
+      resolve();
+      return;
+    }
+    Module.FS.syncfs(true, (error) => {
+      if (error) log('[saves] Could not load saved data: ' + error);
+      savesMounted = !error;
+      resolve();
+    });
+  });
+}
+// Write anything that changed to IndexedDB. This is cheap when nothing did.
+function storeSaves() {
+  if (!savesMounted || savesSyncing) return;
+  savesSyncing = true;
+  Module.FS.syncfs(false, (error) => {
+    savesSyncing = false;
+    if (error) log('[saves] Could not store saved data: ' + error);
+  });
+}
+setInterval(storeSaves, 3000);
+// Phones may discard a page in the background without warning, so this is
+// the last reliable moment to save.
+document.addEventListener('visibilitychange', () => { if (document.hidden) storeSaves(); });
+window.addEventListener('pagehide', storeSaves);
+
+// The app file chosen last time is kept in this browser (in IndexedDB, on
+// this device) so that it doesn't have to be chosen again on every visit.
+function openAppStore() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('pocket-hle-apps', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('apps');
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+async function rememberApp(name, bytes) {
+  try {
+    const db = await openAppStore();
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction('apps', 'readwrite');
+      transaction.objectStore('apps').put({ name, bytes: new Blob([bytes]) }, 'last');
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    });
+  } catch (e) {
+    log('[apps] The app file could not be kept for next time: ' + e);
+  }
+}
+async function recallApp() {
+  try {
+    const db = await openAppStore();
+    return await new Promise((resolve, reject) => {
+      const request = db.transaction('apps').objectStore('apps').get('last');
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
+    });
+  } catch (e) {
+    return null;
+  }
+}
+
 let started = false;
 async function start(bytes, name) {
   if (started) return;
   started = true;
   pickEl.disabled = true;
   pickLabel.setAttribute('aria-disabled', 'true');
+  playAgainEl.hidden = true;
   setStatus('Starting ' + name + '…');
+  await loadSaves();
   Module.FS.writeFile('/app.ipa', bytes);
   Module.canvas.focus();
   try {
@@ -236,8 +352,16 @@ pickEl.addEventListener('change', async () => {
   const file = pickEl.files[0];
   if (!file) return;
   setStatus('Reading ' + file.name + '…');
-  start(new Uint8Array(await file.arrayBuffer()), file.name);
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  rememberApp(file.name, bytes);
+  start(bytes, file.name);
 });
+
+// Offline support and installation to the home screen. Service workers need
+// a secure origin (https, or localhost during development).
+if ('serviceWorker' in navigator && !params.has('debug')) {
+  navigator.serviceWorker.register('sw.js').catch((e) => log('[offline] ' + e));
+}
 
 // For development: with ?autoload in the address, an app file placed next to
 // this page as test-app.ipa is started without asking.
