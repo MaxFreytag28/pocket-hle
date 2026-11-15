@@ -568,6 +568,26 @@ for (const type of ['keydown', 'keypress', 'keyup']) {
   textEntry.addEventListener(type, (e) => e.stopPropagation());
 }
 
+// A line in the log every 10 seconds while a game runs, saying how much it
+// drew and how many taps reached it. When a game seems frozen, this tells
+// whether the game stopped or only the picture did.
+const heartbeat = { draws: 0, taps: 0, frames: 0 };
+for (const Context of [window.WebGL2RenderingContext, window.WebGLRenderingContext]) {
+  if (!Context) continue;
+  for (const name of ['drawArrays', 'drawElements']) {
+    const original = Context.prototype[name];
+    Context.prototype[name] = function (...args) { heartbeat.draws++; return original.apply(this, args); };
+  }
+}
+document.getElementById('canvas').addEventListener('pointerdown', () => { heartbeat.taps++; }, true);
+(function countFrames() { heartbeat.frames++; requestAnimationFrame(countFrames); })();
+setInterval(() => {
+  if (!document.body.classList.contains('playing')) return;
+  log('[heartbeat] last 10 s: ' + heartbeat.draws + ' draw calls, ' + heartbeat.frames +
+    ' screen updates, ' + heartbeat.taps + ' taps' + (document.hidden ? ' (page hidden)' : ''));
+  heartbeat.draws = heartbeat.taps = heartbeat.frames = 0;
+}, 10000);
+
 // For development: with ?debug in the address, the last frame drawn stays
 // readable (canvas.toDataURL() etc), at some cost in speed.
 if (params.has('debug')) {
