@@ -28,116 +28,175 @@
     }
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body {
-    margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+    margin: 0; background: var(--bg); color: var(--text);
     font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
-    display: flex; flex-direction: column; align-items: center; gap: 12px;
   }
-  h1 { font-size: 18px; margin: 4px 0 0; font-weight: 600; }
-  p { margin: 0; color: var(--muted); max-width: 60ch; text-align: center; }
+  button { font: inherit; }
+  button.small {
+    padding: 6px 12px; border-radius: 6px; cursor: pointer;
+    background: transparent; color: var(--accent); border: 1px solid var(--accent);
+  }
+  button.primary {
+    padding: 9px 16px; border: 0; border-radius: 6px; cursor: pointer;
+    background: var(--accent); color: #fff; font-weight: 600;
+  }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px;
+  }
+
+  /* The hub: the start screen, listing the games kept on this device. */
+  #hub {
+    max-width: 860px; margin: 0 auto; min-height: 100dvh;
+    padding: 20px max(16px, env(safe-area-inset-right)) 20px max(16px, env(safe-area-inset-left));
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  #hub header h1 { font-size: 22px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  #hub header p { margin: 2px 0 0; color: var(--muted); }
+  #hub h2 {
+    font-size: 12px; font-weight: 600; margin: 0; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  #library { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 12px; }
+  .tile {
+    position: relative; display: flex; flex-direction: column; align-items: center; gap: 10px;
+    padding: 16px 10px 12px; border-radius: 12px; cursor: pointer; text-align: center;
+    background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    min-height: 148px;
+  }
+  .tile:hover, .tile:focus-visible { border-color: var(--accent); outline: none; }
+  .tile .icon {
+    width: 72px; height: 72px; border-radius: 16px; flex: none;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 26px; font-weight: 700; letter-spacing: 0.02em;
+  }
+  .tile .name { font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
+  .tile.add { border-style: dashed; color: var(--muted); justify-content: center; }
+  .tile.add .icon { background: transparent; border: 2px dashed var(--border); color: var(--muted); font-weight: 400; font-size: 34px; }
+  .tile .remove {
+    position: absolute; top: 4px; right: 4px; width: 28px; height: 28px; border-radius: 14px;
+    border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px;
+  }
+  .tile .remove:hover { background: var(--border); color: var(--text); }
+  input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  #status { color: var(--muted); min-height: 1.45em; }
+  #hub .spacer { flex: 1; }
+  #log-head { display: flex; align-items: center; gap: 10px; }
+  #log-head .grow { flex: 1; color: var(--muted); font-size: 13px; }
+  #log-toggle { background: none; border: 0; padding: 0; color: var(--text); cursor: pointer; font-weight: 600; }
+  #log {
+    margin: 10px 0 0; max-height: 260px; overflow: auto; white-space: pre-wrap;
+    word-break: break-word; font: 12px/1.4 ui-monospace, Consolas, monospace;
+  }
+  #hub footer { color: var(--muted); font-size: 13px; }
+
+  /* The game: nothing but the screen, as large as fits. This is done with
+     the page's layout rather than by putting the canvas itself into
+     fullscreen, so that it also works where the Fullscreen API isn't
+     available (iPhone). */
+  #game {
+    position: fixed; inset: 0; background: #000;
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
+  }
+  body:not(.playing) #game { display: none; }
+  body.playing #hub { display: none; }
+  body.playing { overflow: hidden; background: #000; }
   /* The id must be "canvas": that is where Emscripten's SDL2 looks for the
      element to attach its mouse, touch and keyboard listeners to. */
   #canvas {
-    background: #000; border: 1px solid var(--border); border-radius: 6px;
-    /* Fill the width that is available, up to twice the size of the original
-       screen, and never taller than the window. */
-    width: min(100%, 960px, calc((100vh - 24px) * 1.5)); height: auto; aspect-ratio: 3 / 2;
-    image-rendering: pixelated; touch-action: none;
+    background: #000; display: block;
+    width: min(100vw, calc(100dvh * 1.5)); height: auto; aspect-ratio: 3 / 2;
+    image-rendering: pixelated; touch-action: none; outline: none;
     -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
   }
-  button.pick {
-    padding: 9px 16px; border: 0; border-radius: 6px; cursor: pointer; margin-right: 8px;
-    background: var(--accent); color: #fff; font: inherit; font-weight: 600;
+  #game-menu-button {
+    position: fixed; top: max(6px, env(safe-area-inset-top)); right: max(6px, env(safe-area-inset-right));
+    z-index: 3; width: 34px; height: 34px; border-radius: 17px; border: 0; cursor: pointer;
+    background: rgba(255, 255, 255, 0.16); color: #fff; font-size: 18px; line-height: 1;
   }
-  label.pick.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
-  .panel {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-    padding: 12px 14px; width: 100%; max-width: 640px;
+  #game-menu {
+    position: fixed; inset: 0; z-index: 4; background: rgba(0, 0, 0, 0.6);
+    display: flex; align-items: center; justify-content: center; padding: 16px;
   }
-  label.pick {
-    display: inline-block; padding: 9px 16px; border-radius: 6px; cursor: pointer;
-    background: var(--accent); color: #fff; font-weight: 600;
-  }
-  label.pick[aria-disabled="true"] { opacity: .5; cursor: default; }
-  input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
-  #status { color: var(--muted); margin-top: 8px; }
-  button.small {
-    padding: 6px 12px; border-radius: 6px; cursor: pointer; font: inherit;
-    background: transparent; color: var(--accent); border: 1px solid var(--accent);
-  }
-  #copy-log { margin-top: 8px; }
-
-  /* Fullscreen mode: nothing but the screen, as large as fits. This is done
-     with styles rather than by putting the canvas itself into fullscreen,
-     so that it also works where the Fullscreen API isn't available (iPhone). */
-  #exit-fullscreen { display: none; }
-  body.fullscreen { padding: 0; gap: 0; background: #000; height: 100dvh; justify-content: center; overflow: hidden; }
-  body.fullscreen > :not(#canvas):not(#text-panel):not(#exit-fullscreen) { display: none; }
-  body.fullscreen #canvas {
-    border: 0; border-radius: 0;
-    width: min(100vw, calc(100dvh * 1.5)); max-width: none;
-  }
-  body.fullscreen #text-panel {
-    position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 2;
-    max-width: min(640px, calc(100vw - 16px));
-  }
-  body.fullscreen #exit-fullscreen {
-    display: block; position: fixed; top: 6px; right: 6px; z-index: 3;
-    width: 32px; height: 32px; border-radius: 16px; border: 0; cursor: pointer;
-    background: rgba(255, 255, 255, 0.18); color: #fff; font-size: 15px; line-height: 1;
+  #game-menu .panel { width: 100%; max-width: 320px; display: flex; flex-direction: column; gap: 10px; }
+  #game-menu p { margin: 0; color: var(--muted); }
+  #game-menu button { width: 100%; padding: 10px 14px; }
+  #text-panel {
+    position: fixed; top: max(8px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
+    z-index: 2; width: 100%; max-width: min(640px, calc(100vw - 96px));
   }
   #text-panel label { display: block; color: var(--muted); margin-bottom: 6px; }
   #text-entry {
     width: 100%; padding: 9px 10px; font: inherit; color: var(--text);
     background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
   }
-  details summary { cursor: pointer; color: var(--muted); }
-  #log {
-    margin: 8px 0 0; max-height: 260px; overflow: auto; white-space: pre-wrap;
-    word-break: break-word; font: 12px/1.4 ui-monospace, Consolas, monospace;
-  }
 </style>
 </head>
 <body>
-  <h1>pocket-hle</h1>
-  <p>Runs old iPhone OS apps in the browser. Choose an app file (.ipa) that you own; it stays on this device and is not uploaded anywhere.</p>
+  <main id="hub">
+    <header>
+      <h1>pocket-hle</h1>
+      <p>Old iPhone games, running in your browser.</p>
+    </header>
 
-  <canvas id="canvas" width="480" height="320" tabindex="0"></canvas>
-
-  <!-- Shown while the app wants text. A real text field is what makes a
-       phone show its keyboard. -->
-  <div class="panel" id="text-panel" hidden>
-    <label for="text-entry">The app is asking for text. Type here:</label>
-    <input type="text" id="text-entry" autocomplete="off" autocorrect="off" autocapitalize="off"
-           spellcheck="false" enterkeyhint="done">
-  </div>
-
-  <div class="panel">
-    <button class="pick" id="play-again" hidden></button>
-    <label class="pick" id="pick-label" aria-disabled="true">
-      <span id="pick-text">Choose app file</span>
-      <input type="file" id="pick" accept=".ipa,application/octet-stream" disabled>
-    </label>
-    <button class="small" id="fullscreen" type="button">Fullscreen</button>
+    <h2>Your games</h2>
+    <div id="library">
+      <label class="tile add" id="add-tile" tabindex="0">
+        <span class="icon">+</span>
+        <span class="name">Add a game</span>
+        <input type="file" id="pick" accept=".ipa,application/octet-stream">
+      </label>
+    </div>
     <div id="status">Loading the emulator…</div>
+
+    <div class="spacer"></div>
+
+    <div class="panel" id="log-panel">
+      <div id="log-head">
+        <button id="log-toggle" type="button" aria-expanded="false">▸ Log</button>
+        <span class="grow" id="log-note"></span>
+        <button class="small" id="copy-log" type="button">Copy log</button>
+      </div>
+      <pre id="log" hidden></pre>
+    </div>
+    <footer>Games are app files (.ipa) that you add yourself. They and your saved progress stay in this browser on this device; nothing is uploaded.</footer>
+  </main>
+
+  <div id="game">
+    <canvas id="canvas" width="480" height="320" tabindex="0"></canvas>
+
+    <!-- Shown while the app wants text. A real text field is what makes a
+         phone show its keyboard. -->
+    <div class="panel" id="text-panel" hidden>
+      <label for="text-entry">The game is asking for text. Type here:</label>
+      <input type="text" id="text-entry" autocomplete="off" autocorrect="off" autocapitalize="off"
+             spellcheck="false" enterkeyhint="done">
+    </div>
+
+    <button id="game-menu-button" type="button" aria-label="Menu">⋯</button>
+    <div id="game-menu" hidden>
+      <div class="panel">
+        <p id="game-menu-text"></p>
+        <button class="primary" id="menu-resume" type="button">Back to the game</button>
+        <button class="small" id="menu-fullscreen" type="button">Fullscreen</button>
+        <button class="small" id="menu-copy-log" type="button">Copy log</button>
+        <button class="small" id="menu-leave" type="button">Leave game</button>
+      </div>
+    </div>
   </div>
-
-  <!-- Only visible in fullscreen mode. -->
-  <button id="exit-fullscreen" type="button" aria-label="Leave fullscreen">✕</button>
-
-  <details class="panel" id="log-panel">
-    <summary>Log</summary>
-    <button class="small" id="copy-log" type="button">Copy log</button>
-    <pre id="log"></pre>
-  </details>
 
 <script>
 'use strict';
 const statusEl = document.getElementById('status');
 const logEl = document.getElementById('log');
 const pickEl = document.getElementById('pick');
-const pickLabel = document.getElementById('pick-label');
-const playAgainEl = document.getElementById('play-again');
+const libraryEl = document.getElementById('library');
+const addTile = document.getElementById('add-tile');
+const gameMenu = document.getElementById('game-menu');
+const gameMenuText = document.getElementById('game-menu-text');
+const params = new URLSearchParams(location.search);
 
 // Everything the emulator prints, most recent last. Kept on `window` so it
 // can be inspected from the developer console.
@@ -150,6 +209,7 @@ function log(line) {
     log.pending = true;
     requestAnimationFrame(() => {
       log.pending = false;
+      if (logEl.hidden) return;
       logEl.textContent = logLines.slice(-400).join('\n');
       logEl.scrollTop = logEl.scrollHeight;
     });
@@ -157,10 +217,20 @@ function log(line) {
 }
 function setStatus(text) { statusEl.textContent = text; }
 
-// Copy the whole log (not just the part that is shown).
-const copyLogEl = document.getElementById('copy-log');
-copyLogEl.addEventListener('click', async () => {
-  const text = logLines.join('\n');
+// Leaving a game reloads the page (the emulator can run one app per page
+// load), so the log of that run is kept for the hub to show and copy.
+const LAST_LOG_KEY = 'pocket-hle-last-log';
+let lastRunLog = '';
+try { lastRunLog = localStorage.getItem(LAST_LOG_KEY) || ''; } catch (e) { /* no storage */ }
+function keepLog() {
+  if (!started) return;
+  try { localStorage.setItem(LAST_LOG_KEY, logLines.join('\n').slice(-400000)); } catch (e) { /* full or no storage */ }
+}
+// The log of this page load if a game has run in it, otherwise of the last run.
+function fullLog() { return started || !lastRunLog ? logLines.join('\n') : lastRunLog; }
+
+async function copyLog(button) {
+  const text = fullLog();
   try {
     await navigator.clipboard.writeText(text);
   } catch (e) {
@@ -173,47 +243,79 @@ copyLogEl.addEventListener('click', async () => {
     document.execCommand('copy');
     box.remove();
   }
-  copyLogEl.textContent = 'Copied';
-  setTimeout(() => { copyLogEl.textContent = 'Copy log'; }, 1500);
+  const label = button.textContent;
+  button.textContent = 'Copied';
+  setTimeout(() => { button.textContent = label; }, 1500);
+}
+const copyLogEl = document.getElementById('copy-log');
+copyLogEl.addEventListener('click', () => copyLog(copyLogEl));
+const menuCopyLogEl = document.getElementById('menu-copy-log');
+menuCopyLogEl.addEventListener('click', () => copyLog(menuCopyLogEl));
+
+const logToggle = document.getElementById('log-toggle');
+logToggle.addEventListener('click', () => {
+  logEl.hidden = !logEl.hidden;
+  logToggle.textContent = (logEl.hidden ? '▸' : '▾') + ' Log';
+  logToggle.setAttribute('aria-expanded', String(!logEl.hidden));
+  if (!logEl.hidden) {
+    logEl.textContent = fullLog().split('\n').slice(-400).join('\n');
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+});
+if (lastRunLog) document.getElementById('log-note').textContent = 'from the last game you ran';
+
+// The browser's fullscreen and orientation lock, where they exist, to get rid
+// of the browser's bars. This has to be asked for while handling a tap.
+function requestFullscreen() {
+  const request = document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen;
+  if (!request) return;
+  Promise.resolve(request.call(document.documentElement))
+    .then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape'))
+    .catch(() => { /* not allowed or not supported: the layout still fills the window */ });
+}
+
+// The menu over a running game. `message` is set when the game has stopped.
+function showGameMenu(message) {
+  gameMenuText.textContent = message || '';
+  gameMenuText.hidden = !message;
+  if (message) document.getElementById('menu-resume').hidden = true;
+  if (message) document.getElementById('menu-fullscreen').hidden = true;
+  gameMenu.hidden = false;
+}
+document.getElementById('game-menu-button').addEventListener('click', () => showGameMenu(stoppedMessage));
+document.getElementById('menu-resume').addEventListener('click', () => {
+  gameMenu.hidden = true;
+  Module.canvas.focus();
+});
+document.getElementById('menu-fullscreen').addEventListener('click', () => {
+  requestFullscreen();
+  gameMenu.hidden = true;
+  Module.canvas.focus();
+});
+document.getElementById('menu-leave').addEventListener('click', async () => {
+  keepLog();
+  await storeSavesNow();
+  if (document.fullscreenElement || document.webkitFullscreenElement) {
+    try { await (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (e) { /* fine */ }
+  }
+  location.reload();
 });
 
-// Fullscreen mode. The page's own layout does the work (see the styles); the
-// browser's fullscreen and orientation lock are asked for on top of that
-// where they exist, to get rid of the browser's bars as well.
-function setFullscreen(on) {
-  document.body.classList.toggle('fullscreen', on);
-  if (on) {
-    const request = document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen;
-    if (request) {
-      Promise.resolve(request.call(document.documentElement))
-        .then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape'))
-        .catch(() => { /* not allowed or not supported: the layout still applies */ });
-    }
-  } else if (document.fullscreenElement || document.webkitFullscreenElement) {
-    (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-  }
-}
-document.getElementById('fullscreen').addEventListener('click', () => setFullscreen(true));
-document.getElementById('exit-fullscreen').addEventListener('click', () => setFullscreen(false));
-// Leaving the browser's fullscreen (Escape, back gesture) leaves ours too.
-for (const type of ['fullscreenchange', 'webkitfullscreenchange']) {
-  document.addEventListener(type, () => {
-    if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-      document.body.classList.remove('fullscreen');
-    }
-  });
+let stoppedMessage = '';
+function gameStopped(message) {
+  stoppedMessage = message;
+  keepLog();
+  if (started) showGameMenu(message); else setStatus(message);
 }
 
 window.addEventListener('error', (e) => {
   log('[page error] ' + (e.message || e));
-  setStatus('Something went wrong. See the log below.');
+  gameStopped('Something went wrong. Copy the log to see what.');
 });
 window.addEventListener('unhandledrejection', (e) => {
   log('[page error] ' + (e.reason && e.reason.stack || e.reason));
-  setStatus('Something went wrong. See the log below.');
+  gameStopped('Something went wrong. Copy the log to see what.');
 });
-
-const params = new URLSearchParams(location.search);
 
 // What has been typed into the text field and not yet collected by the
 // emulator. Backspace is U+0008 and Return is a newline.
@@ -276,13 +378,16 @@ if (params.has('debug')) {
   };
 }
 
+// Resolved once the emulator itself has loaded. A game can be chosen before
+// that; it starts when this is done.
+let runtimeLoaded;
+const runtimeReady = new Promise((resolve) => { runtimeLoaded = resolve; });
+
 var Module = {
   canvas: document.getElementById('canvas'),
   print: log,
   printErr: log,
-  onExit: (code) => {
-    setStatus('The app has exited (code ' + code + ').');
-  },
+  onExit: (code) => gameStopped('The game has exited (code ' + code + ').'),
   // Text input: see the web_text_input module in src/window.rs.
   pocketHleTextInput: (active) => {
     textPanel.hidden = !active;
@@ -302,29 +407,15 @@ var Module = {
     pendingText = '';
     return text;
   },
-  setStatus: (text) => { if (text) setStatus(text); },
-  onRuntimeInitialized: async () => {
-    pickEl.disabled = false;
-    pickLabel.setAttribute('aria-disabled', 'false');
-    setStatus('Ready. Choose an app file to start.');
-    if (params.has('autoload')) { maybeAutoload(); return; }
-    // Offer the app file that was used last time, if there is one.
-    const remembered = await recallApp();
-    if (remembered && !started) {
-      playAgainEl.textContent = 'Play ' + remembered.name.replace(/\.ipa$/i, '');
-      playAgainEl.hidden = false;
-      playAgainEl.onclick = async () => {
-        start(new Uint8Array(await remembered.bytes.arrayBuffer()), remembered.name);
-      };
-      pickLabel.classList.add('secondary');
-      document.getElementById('pick-text').textContent = 'Choose a different file';
-      setStatus('Ready.');
-    }
+  setStatus: (text) => { if (text && !started) setStatus(text); },
+  onRuntimeInitialized: () => {
+    if (!started) setStatus('');
+    runtimeLoaded();
+    if (params.has('autoload')) maybeAutoload();
   },
   onAbort: (what) => {
     log('[aborted] ' + what);
-    setStatus('The emulator stopped. See the log below.');
-    document.getElementById('log-panel').open = true;
+    gameStopped('The game stopped. Copy the log to see why.');
   },
 };
 
@@ -360,14 +451,29 @@ function storeSaves() {
     if (error) log('[saves] Could not store saved data: ' + error);
   });
 }
+// The same, but waits until it is done (or two seconds at most).
+function storeSavesNow() {
+  return new Promise((resolve) => {
+    if (!savesMounted) { resolve(); return; }
+    setTimeout(resolve, 2000);
+    const run = () => {
+      if (savesSyncing) { setTimeout(run, 50); return; }
+      savesSyncing = true;
+      try {
+        Module.FS.syncfs(false, () => { savesSyncing = false; resolve(); });
+      } catch (e) { savesSyncing = false; resolve(); }
+    };
+    run();
+  });
+}
 setInterval(storeSaves, 3000);
 // Phones may discard a page in the background without warning, so this is
 // the last reliable moment to save.
-document.addEventListener('visibilitychange', () => { if (document.hidden) storeSaves(); });
-window.addEventListener('pagehide', storeSaves);
+document.addEventListener('visibilitychange', () => { if (document.hidden) { storeSaves(); keepLog(); } });
+window.addEventListener('pagehide', () => { storeSaves(); keepLog(); });
 
-// The app file chosen last time is kept in this browser (in IndexedDB, on
-// this device) so that it doesn't have to be chosen again on every visit.
+// The library: the app files that have been added are kept in this browser
+// (in IndexedDB, on this device), each under its file name.
 function openAppStore() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open('pocket-hle-apps', 1);
@@ -376,29 +482,127 @@ function openAppStore() {
     request.onerror = () => reject(request.error);
   });
 }
-async function rememberApp(name, bytes) {
-  try {
-    const db = await openAppStore();
-    await new Promise((resolve, reject) => {
-      const transaction = db.transaction('apps', 'readwrite');
-      transaction.objectStore('apps').put({ name, bytes: new Blob([bytes]) }, 'last');
-      transaction.oncomplete = resolve;
-      transaction.onerror = () => reject(transaction.error);
-    });
-  } catch (e) {
-    log('[apps] The app file could not be kept for next time: ' + e);
-  }
+async function appStore(mode, action) {
+  const db = await openAppStore();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('apps', mode);
+    const result = action(transaction.objectStore('apps'));
+    transaction.oncomplete = () => resolve(result && result.result);
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
 }
-async function recallApp() {
+// Only the names: the files themselves are read when a game is started.
+async function listApps() {
+  const apps = new Map();
+  await appStore('readonly', (store) => {
+    store.openCursor().onsuccess = (event) => {
+      const cursor = event.target.result;
+      if (!cursor) return;
+      // Entries by an earlier version of this page are all under the key
+      // "last"; a file added again since then takes precedence.
+      if (!apps.has(cursor.value.name) || cursor.key !== 'last') {
+        apps.set(cursor.value.name, cursor.key);
+      }
+      cursor.continue();
+    };
+  });
+  return [...apps].map(([name, key]) => ({ name, key }))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+}
+
+function displayName(fileName) { return fileName.replace(/\.ipa$/i, ''); }
+function tileFor(app) {
+  const title = displayName(app.name);
+  const tile = document.createElement('div');
+  tile.className = 'tile';
+  tile.tabIndex = 0;
+  tile.setAttribute('role', 'button');
+  tile.setAttribute('aria-label', 'Play ' + title);
+
+  // A plain coloured badge with the name's initials. (App icons in .ipa files
+  // are in a format browsers can't show.)
+  const icon = document.createElement('span');
+  icon.className = 'icon';
+  let hash = 0;
+  for (const c of title) hash = (hash * 31 + c.codePointAt(0)) >>> 0;
+  icon.style.background = 'hsl(' + (hash % 360) + ' 45% 42%)';
+  const words = title.replace(/(\p{Ll})(\p{Lu})/gu, '$1 $2').split(/[^\p{L}\p{N}]+/u)
+    .filter((w) => /^\p{L}/u.test(w));
+  icon.textContent = (words.length > 1 ? words[0][0] + words[1][0] : title.slice(0, 2)).toUpperCase();
+
+  const name = document.createElement('span');
+  name.className = 'name';
+  name.textContent = title;
+
+  const remove = document.createElement('button');
+  remove.className = 'remove';
+  remove.type = 'button';
+  remove.textContent = '✕';
+  remove.setAttribute('aria-label', 'Remove ' + title);
+  remove.addEventListener('click', async (event) => {
+    event.stopPropagation();
+    if (!confirm('Remove ' + title + ' from this device? Your saved progress is kept, in case you add it again.')) return;
+    await appStore('readwrite', (store) => store.delete(app.key));
+    showLibrary();
+  });
+
+  const play = () => launch(app);
+  tile.addEventListener('click', play);
+  tile.addEventListener('keydown', (event) => {
+    if (event.target === tile && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); play(); }
+  });
+  tile.append(icon, name, remove);
+  return tile;
+}
+async function showLibrary() {
+  let apps = [];
   try {
-    const db = await openAppStore();
-    return await new Promise((resolve, reject) => {
-      const request = db.transaction('apps').objectStore('apps').get('last');
-      request.onsuccess = () => resolve(request.result || null);
-      request.onerror = () => reject(request.error);
-    });
+    apps = await listApps();
   } catch (e) {
-    return null;
+    log('[apps] The library could not be read: ' + e);
+  }
+  for (const tile of [...libraryEl.querySelectorAll('.tile:not(.add)')]) tile.remove();
+  for (const app of apps) libraryEl.insertBefore(tileFor(app), addTile);
+  return apps;
+}
+showLibrary();
+
+addTile.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); pickEl.click(); }
+});
+pickEl.addEventListener('change', async () => {
+  const file = pickEl.files[0];
+  pickEl.value = '';
+  if (!file) return;
+  setStatus('Adding ' + file.name + '…');
+  try {
+    // Ask the browser not to clear the library when it is short on space.
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+    await appStore('readwrite', (store) => store.put({ name: file.name, bytes: file }, file.name));
+    await showLibrary();
+    setStatus(displayName(file.name) + ' was added. Tap it to play.');
+  } catch (e) {
+    log('[apps] The app file could not be kept: ' + e);
+    setStatus('The file could not be kept in this browser, so it will start once now.');
+    start(new Uint8Array(await file.arrayBuffer()), file.name);
+  }
+});
+
+// Start a game from the library. Called while handling a tap, which is what
+// allows going fullscreen.
+async function launch(app) {
+  if (started || launch.busy) return;
+  launch.busy = true;
+  requestFullscreen();
+  try {
+    const entry = await appStore('readonly', (store) => store.get(app.key));
+    const bytes = new Uint8Array(await entry.bytes.arrayBuffer());
+    await start(bytes, app.name);
+  } catch (e) {
+    launch.busy = false;
+    log('[apps] ' + (e && e.stack || e));
+    setStatus('That game could not be opened. Try adding its file again.');
   }
 }
 
@@ -406,10 +610,10 @@ let started = false;
 async function start(bytes, name) {
   if (started) return;
   started = true;
-  pickEl.disabled = true;
-  pickLabel.setAttribute('aria-disabled', 'true');
-  playAgainEl.hidden = true;
-  setStatus('Starting ' + name + '…');
+  logLines.length = 0;
+  document.body.classList.add('playing');
+  document.title = displayName(name) + ' – pocket-hle';
+  await runtimeReady;
   await loadSaves();
   Module.FS.writeFile('/app.ipa', bytes);
   Module.canvas.focus();
@@ -417,22 +621,11 @@ async function start(bytes, name) {
     // This returns as soon as the emulator first pauses to let the browser
     // do its work, not when the app exits (see Module.onExit for that).
     Module.callMain(['/app.ipa']);
-    setStatus('Running ' + name + '.');
   } catch (e) {
     log('[exited] ' + (e && e.stack || e));
-    setStatus('The emulator stopped. See the log below.');
-    document.getElementById('log-panel').open = true;
+    gameStopped('The game stopped. Copy the log to see why.');
   }
 }
-
-pickEl.addEventListener('change', async () => {
-  const file = pickEl.files[0];
-  if (!file) return;
-  setStatus('Reading ' + file.name + '…');
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  rememberApp(file.name, bytes);
-  start(bytes, file.name);
-});
 
 // Offline support and installation to the home screen. Service workers need
 // a secure origin (https, or localhost during development).
@@ -443,7 +636,6 @@ if ('serviceWorker' in navigator && !params.has('debug')) {
 // For development: with ?autoload in the address, an app file placed next to
 // this page as test-app.ipa is started without asking.
 async function maybeAutoload() {
-  if (!params.has('autoload')) return;
   const response = await fetch('test-app.ipa');
   if (!response.ok) { setStatus('Autoload: test-app.ipa not found.'); return; }
   start(new Uint8Array(await response.arrayBuffer()), 'test-app.ipa');
