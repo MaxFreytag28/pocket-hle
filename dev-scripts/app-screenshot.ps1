@@ -8,7 +8,10 @@ param(
     # Typed text as "seconds:text"; a newline character in text presses Return.
     [string[]]$Keys = @(),
     [string]$Prefix = 'shot',
-    [int]$Tail = 12
+    [int]$Tail = 12,
+    # Extra command-line options for touchHLE, e.g. '--gles1=gles1_on_gles2'.
+    [string]$ExtraArgs = '',
+    [string]$Exe = '.\target\release\touchHLE.exe'
 )
 $env:TOUCHHLE_NO_CRASH_DIALOG = '1'
 $env:TOUCHHLE_TICK_STATS = '1'
@@ -29,7 +32,7 @@ public static class HcWin {
 '@
 [void][HcWin]::SetProcessDPIAware()
 
-$p = Start-Process -FilePath .\target\release\touchHLE.exe -ArgumentList "`"$Ipa`"" -RedirectStandardOutput run_out.log -RedirectStandardError run_err.log -PassThru
+$p = Start-Process -FilePath $Exe -ArgumentList ("`"$Ipa`" $ExtraArgs".Trim()) -RedirectStandardOutput run_out.log -RedirectStandardError run_err.log -PassThru
 $sw = [Diagnostics.Stopwatch]::StartNew()
 
 $events = @()

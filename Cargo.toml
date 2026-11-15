@@ -33,6 +33,10 @@ static = ["sdl2/bundled", "sdl2/static-link", "touchHLE_openal_soft_wrapper/stat
 # this, only the portable interpreter backend is available. That is the only
 # option on platforms where code can't be generated at runtime.
 jit = ["dep:touchHLE_dynarmic_wrapper"]
+# Use the memory layout meant for 32-bit hosts (see src/mem/backing.rs) on a
+# 64-bit host too. This is only useful for testing that layout. It can't be
+# combined with the JIT, which needs the whole address space in one piece.
+compact_mem = []
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

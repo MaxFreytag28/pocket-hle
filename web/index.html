@@ -1,0 +1,200 @@
+<!doctype html>
+<!--
+  This Source Code Form is subject to the terms of the Mozilla Public
+  License, v. 2.0. If a copy of the MPL was not distributed with this
+  file, You can obtain one at https://mozilla.org/MPL/2.0/.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>pocket-hle</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1e2127; --text: #e6e8ec; --muted: #9aa1ad;
+    --accent: #6cb2ff; --border: #2c313a;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f4f5f7; --panel: #ffffff; --text: #1b1e24; --muted: #5d6573;
+      --accent: #0b63ce; --border: #d5d9e0;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column; align-items: center; gap: 12px;
+  }
+  h1 { font-size: 18px; margin: 4px 0 0; font-weight: 600; }
+  p { margin: 0; color: var(--muted); max-width: 60ch; text-align: center; }
+  /* The id must be "canvas": that is where Emscripten's SDL2 looks for the
+     element to attach its mouse, touch and keyboard listeners to. */
+  #canvas {
+    background: #000; border: 1px solid var(--border); border-radius: 6px;
+    max-width: 100%; height: auto; image-rendering: pixelated; touch-action: none;
+  }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px; width: 100%; max-width: 640px;
+  }
+  label.pick {
+    display: inline-block; padding: 9px 16px; border-radius: 6px; cursor: pointer;
+    background: var(--accent); color: #fff; font-weight: 600;
+  }
+  label.pick[aria-disabled="true"] { opacity: .5; cursor: default; }
+  input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  #status { color: var(--muted); margin-top: 8px; }
+  details summary { cursor: pointer; color: var(--muted); }
+  #log {
+    margin: 8px 0 0; max-height: 260px; overflow: auto; white-space: pre-wrap;
+    word-break: break-word; font: 12px/1.4 ui-monospace, Consolas, monospace;
+  }
+</style>
+</head>
+<body>
+  <h1>pocket-hle</h1>
+  <p>Runs old iPhone OS apps in the browser. Choose an app file (.ipa) that you own; it stays on this device and is not uploaded anywhere.</p>
+
+  <canvas id="canvas" width="480" height="320" tabindex="0"></canvas>
+
+  <div class="panel">
+    <label class="pick" id="pick-label" aria-disabled="true">
+      Choose app file
+      <input type="file" id="pick" accept=".ipa,application/octet-stream" disabled>
+    </label>
+    <div id="status">Loading the emulator…</div>
+  </div>
+
+  <details class="panel" id="log-panel">
+    <summary>Log</summary>
+    <pre id="log"></pre>
+  </details>
+
+<script>
+'use strict';
+const statusEl = document.getElementById('status');
+const logEl = document.getElementById('log');
+const pickEl = document.getElementById('pick');
+const pickLabel = document.getElementById('pick-label');
+
+// Everything the emulator prints, most recent last. Kept on `window` so it
+// can be inspected from the developer console.
+const logLines = window.pocketHleLog = [];
+function log(line) {
+  logLines.push(line);
+  if (logLines.length > 4000) logLines.splice(0, 1000);
+  // Updating the DOM for every line is slow, so batch it.
+  if (!log.pending) {
+    log.pending = true;
+    requestAnimationFrame(() => {
+      log.pending = false;
+      logEl.textContent = logLines.slice(-400).join('\n');
+      logEl.scrollTop = logEl.scrollHeight;
+    });
+  }
+}
+function setStatus(text) { statusEl.textContent = text; }
+
+window.addEventListener('error', (e) => {
+  log('[page error] ' + (e.message || e));
+  setStatus('Something went wrong. See the log below.');
+});
+window.addEventListener('unhandledrejection', (e) => {
+  log('[page error] ' + (e.reason && e.reason.stack || e.reason));
+  setStatus('Something went wrong. See the log below.');
+});
+
+const params = new URLSearchParams(location.search);
+
+// For development: with ?debug in the address, the last frame drawn stays
+// readable (canvas.toDataURL() etc), at some cost in speed.
+if (params.has('debug')) {
+  const getContext = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function (type, attributes) {
+    return getContext.call(this, type, Object.assign({}, attributes, { preserveDrawingBuffer: true }));
+  };
+  // Send the current frame to the development server (dev-scripts/web-serve.py),
+  // which saves it as <name>.png.
+  window.pocketHleShot = async (name) => {
+    const canvas = document.getElementById('canvas');
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    const response = await fetch('/__shot?name=' + encodeURIComponent(name), { method: 'POST', body: blob });
+    return response.status;
+  };
+  // Tap the screen at a position given as fractions of its width and height.
+  window.pocketHleTap = async (fx, fy, holdMs = 200) => {
+    const canvas = document.getElementById('canvas');
+    const rect = canvas.getBoundingClientRect();
+    const options = {
+      clientX: rect.left + rect.width * fx, clientY: rect.top + rect.height * fy,
+      button: 0, buttons: 1, bubbles: true, cancelable: true, view: window,
+    };
+    canvas.dispatchEvent(new MouseEvent('mousemove', options));
+    canvas.dispatchEvent(new MouseEvent('mousedown', options));
+    await new Promise((resolve) => setTimeout(resolve, holdMs));
+    canvas.dispatchEvent(new MouseEvent('mouseup', Object.assign({}, options, { buttons: 0 })));
+  };
+}
+
+var Module = {
+  canvas: document.getElementById('canvas'),
+  print: log,
+  printErr: log,
+  onExit: (code) => {
+    setStatus('The app has exited (code ' + code + ').');
+  },
+  setStatus: (text) => { if (text) setStatus(text); },
+  onRuntimeInitialized: () => {
+    pickEl.disabled = false;
+    pickLabel.setAttribute('aria-disabled', 'false');
+    setStatus('Ready. Choose an app file to start.');
+    maybeAutoload();
+  },
+  onAbort: (what) => {
+    log('[aborted] ' + what);
+    setStatus('The emulator stopped. See the log below.');
+    document.getElementById('log-panel').open = true;
+  },
+};
+
+let started = false;
+async function start(bytes, name) {
+  if (started) return;
+  started = true;
+  pickEl.disabled = true;
+  pickLabel.setAttribute('aria-disabled', 'true');
+  setStatus('Starting ' + name + '…');
+  Module.FS.writeFile('/app.ipa', bytes);
+  Module.canvas.focus();
+  try {
+    // This returns as soon as the emulator first pauses to let the browser
+    // do its work, not when the app exits (see Module.onExit for that).
+    Module.callMain(['/app.ipa']);
+    setStatus('Running ' + name + '.');
+  } catch (e) {
+    log('[exited] ' + (e && e.stack || e));
+    setStatus('The emulator stopped. See the log below.');
+    document.getElementById('log-panel').open = true;
+  }
+}
+
+pickEl.addEventListener('change', async () => {
+  const file = pickEl.files[0];
+  if (!file) return;
+  setStatus('Reading ' + file.name + '…');
+  start(new Uint8Array(await file.arrayBuffer()), file.name);
+});
+
+// For development: with ?autoload in the address, an app file placed next to
+// this page as test-app.ipa is started without asking.
+async function maybeAutoload() {
+  if (!params.has('autoload')) return;
+  const response = await fetch('test-app.ipa');
+  if (!response.ok) { setStatus('Autoload: test-app.ipa not found.'); return; }
+  start(new Uint8Array(await response.arrayBuffer()), 'test-app.ipa');
+}
+</script>
+<script async src="touchHLE.js"></script>
+</body>
+</html>

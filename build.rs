@@ -101,6 +101,54 @@ pub fn main() {
         .unwrap();
     }
 
+    if std::env::var("CARGO_CFG_TARGET_OS").unwrap() == "emscripten" {
+        // The web build. These are all options for the Emscripten linker.
+        let link_arg = |arg: &str| println!("cargo::rustc-link-arg-bins={arg}");
+
+        // Use Emscripten's port of the real SDL2, rather than its much smaller
+        // built-in imitation of the SDL API.
+        link_arg("-sUSE_SDL=2");
+        // Some of the bundled C++ code needs the C++ runtime.
+        link_arg("-sDEFAULT_TO_CXX=1");
+
+        // Guest memory alone is well over 100MiB (see src/mem/backing.rs).
+        link_arg("-sINITIAL_MEMORY=320MB");
+        link_arg("-sALLOW_MEMORY_GROWTH=1");
+        link_arg("-sMAXIMUM_MEMORY=1GB");
+        link_arg("-sSTACK_SIZE=4MB");
+
+        // touchHLE's main loop is an ordinary blocking loop, but a web page
+        // must return to the browser regularly. Asyncify lets the code pause
+        // (in SDL_Delay etc) and resume later.
+        link_arg("-sASYNCIFY=1");
+        link_arg("-sASYNCIFY_STACK_SIZE=65536");
+
+        // WebGL. FULL_ES2 emulates the parts of OpenGL ES 2.0 that WebGL
+        // lacks, in particular vertex arrays that point at client memory.
+        link_arg("-sMAX_WEBGL_VERSION=2");
+        link_arg("-sFULL_ES2=1");
+        link_arg("-sGL_ENABLE_GET_PROC_ADDRESS=1");
+
+        // The page puts the app into the virtual filesystem and then starts
+        // the emulator itself, see web/index.html.
+        link_arg("-sFORCE_FILESYSTEM=1");
+        link_arg("-sINVOKE_RUN=0");
+        link_arg("-sEXIT_RUNTIME=0");
+        link_arg("-sEXPORTED_RUNTIME_METHODS=callMain,FS");
+        link_arg("-sENVIRONMENT=web");
+
+        // Files touchHLE needs at runtime, packaged next to the program.
+        for path in [
+            "touchHLE_dylibs",
+            "touchHLE_fonts",
+            "touchHLE_default_options.txt",
+        ] {
+            let host_path = package_root.join(path);
+            link_arg(&format!("--preload-file={}@/{}", host_path.display(), path));
+            rerun_if_changed(&host_path);
+        }
+    }
+
     if std::env::var("CARGO_CFG_TARGET_OS").unwrap() == "windows" {
         // Rust removed link to advapi32 here https://github.com/rust-lang/rust/pull/138233
         // but sdl2 still depends on it

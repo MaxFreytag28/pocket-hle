@@ -17,6 +17,9 @@
 use crate::libc::wchar::wchar_t;
 
 mod allocator;
+mod backing;
+
+pub use backing::COMPACT as COMPACT_MEM;
 
 /// Equivalent of `usize` for guest memory.
 pub type GuestUSize = u32;
@@ -203,35 +206,21 @@ unsafe impl<T, const MUT: bool> SafeRead for Ptr<T, MUT> {}
 pub trait SafeWrite: Sized {}
 impl<T: SafeRead> SafeWrite for T {}
 
-type Bytes = [u8; 1 << 32];
-
 pub const PAGE_SIZE: GuestUSize = 4096;
 pub const PAGE_SIZE_ALIGN_MASK: GuestUSize = 0xfff;
 
 /// The type that owns the guest memory and provides accessors for it.
 pub struct Mem {
-    /// This array is 4GiB in size so that it can cover the entire 32-bit
-    /// virtual address space, but it should not use that much physical memory,
-    /// assuming that the host OS backs it with lazily-allocated pages and we
-    /// are careful to avoid accessing most of it.
+    /// The host memory behind the guest address space. See [backing] for the
+    /// two ways this can work.
     ///
     /// iPhone OS devices only had 128MiB or 256MiB of RAM total, with no swap
-    /// space, so less than 6.25% of this array should be used, assuming no
-    /// fragmentation.
-    ///
-    /// This is a raw pointer because inevitably we will have to hand out
-    /// pointers to memory sometimes, and being able to hold a `&mut` on this
-    /// array simultaneously seems like an undefined behavior trap. This also
-    /// means that the underlying memory should never be moved, and therefore
-    /// the array can't be growable.
-    ///
-    /// One advantage of `[u8; 1 << 32]` over `[u8]` is that it might help rustc
-    /// optimize away bounds checks for `memory.bytes[ptr_32bit as usize]`.
+    /// space, so only a small part of the 32-bit address space is ever used.
     ///
     /// Note that unless direct memory access is disabled, the CPU emulation
-    /// (dynarmic) accesses memory via this pointer directly except when a page
-    /// fault occurs.
-    bytes: *mut Bytes,
+    /// (dynarmic) accesses this memory directly except when a page fault
+    /// occurs.
+    backing: backing::Backing,
 
     /// The size of the __PAGE_ZERO segment, where pointer accesses are trapped
     /// to prevent null pointer derefrences.
@@ -250,15 +239,6 @@ pub struct Mem {
     pub(super) zero_memory_on_free: bool,
 }
 
-impl Drop for Mem {
-    fn drop(&mut self) {
-        let layout = std::alloc::Layout::new::<Bytes>();
-        unsafe {
-            std::alloc::dealloc(self.bytes as *mut _, layout);
-        }
-    }
-}
-
 impl Mem {
     /// [According to Apple](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/Multithreading/CreatingThreads/CreatingThreads.html)
     /// among others, the iPhone OS main thread stack size is 1MiB.
@@ -275,18 +255,17 @@ impl Mem {
 
     /// Create a fresh instance of guest memory.
     pub fn new() -> Mem {
-        // This will hopefully get the host OS to lazily allocate the memory.
-        let layout = std::alloc::Layout::new::<Bytes>();
-        // TODO: align memory to guest page size
-        // Right now, if aligned, will cause OOM on low end Android devices.
-        // See relevant [Github's issue](https://github.com/touchHLE/touchHLE/issues/498)
-        let bytes = unsafe { std::alloc::alloc_zeroed(layout) as *mut Bytes };
-        assert!(!bytes.is_null());
+        let backing = backing::Backing::new();
 
-        let allocator = allocator::Allocator::new();
+        let allocator = match backing::HEAP {
+            Some((base, size)) => {
+                allocator::Allocator::with_heap(allocator::Chunk::new(base, size))
+            }
+            None => allocator::Allocator::new(),
+        };
 
         Mem {
-            bytes,
+            backing,
             null_segment_size: 0,
             allocator,
             zero_memory_on_free: true,
@@ -300,14 +279,15 @@ impl Mem {
     /// allocation, there might be stray bytes preserved in the result.
     pub fn refurbish(mut mem: Mem) -> Mem {
         let Mem {
-            bytes: _,
+            backing: _,
             null_segment_size: _,
             ref mut allocator,
             ..
         } = mem;
         let used_chunks = allocator.reset_and_drain_used_chunks();
         for allocator::Chunk { base, size } in used_chunks {
-            mem.bytes_mut()[base as usize..][..size.get() as usize].fill(0);
+            let range = mem.backing.range(base, size.get()).unwrap();
+            mem.backing.bytes_mut()[range].fill(0);
         }
         mem.null_segment_size = 0;
         mem
@@ -324,8 +304,10 @@ impl Mem {
         //        this, along with removing this special case.
         assert!(self.null_segment_size == 0);
         assert!(new_null_segment_size.is_multiple_of(0x1000));
-        self.allocator
-            .reserve(allocator::Chunk::new(0, new_null_segment_size));
+        if !backing::COMPACT {
+            self.allocator
+                .reserve(allocator::Chunk::new(0, new_null_segment_size));
+        }
         self.null_segment_size = new_null_segment_size;
     }
 
@@ -340,14 +322,12 @@ impl Mem {
     /// of [Mem]. You must not use it while a `&mut` is held on some region of
     /// guest memory.
     pub unsafe fn direct_memory_access_ptr(&mut self) -> *mut std::ffi::c_void {
-        self.bytes.cast()
+        self.backing.direct_ptr()
     }
 
-    fn bytes(&self) -> &Bytes {
-        unsafe { &*self.bytes }
-    }
-    fn bytes_mut(&mut self) -> &mut Bytes {
-        unsafe { &mut *self.bytes }
+    #[cold]
+    fn unmapped_fail(at: VAddr, size: GuestUSize) -> ! {
+        panic!("Attempted access to unmapped guest memory at {at:#x} ({size:#x} bytes)")
     }
 
     // the performance characteristics of this hasn't been profiled, but it
@@ -363,9 +343,8 @@ impl Mem {
         if addr.to_bits() < self.null_segment_size {
             return None;
         }
-        self.bytes()
-            .get(addr.to_bits() as usize..)?
-            .get(..count as usize)
+        let range = self.backing.range(addr.to_bits(), count)?;
+        self.backing.bytes().get(range)
     }
     /// Special version of [Self::bytes_at_mut] that returns [None] rather than
     /// panicking on failure. Only for use by [crate::gdb::GdbServer].
@@ -377,9 +356,8 @@ impl Mem {
         if addr.to_bits() < self.null_segment_size {
             return None;
         }
-        self.bytes_mut()
-            .get_mut(addr.to_bits() as usize..)?
-            .get_mut(..count as usize)
+        let range = self.backing.range(addr.to_bits(), count)?;
+        self.backing.bytes_mut().get_mut(range)
     }
 
     /// Get a slice for reading `count` bytes. This is the basic primitive for
@@ -393,7 +371,10 @@ impl Mem {
         if ptr.to_bits() < self.null_segment_size {
             Self::null_check_fail(ptr.to_bits(), count)
         }
-        &self.bytes()[ptr.to_bits() as usize..][..count as usize]
+        match self.backing.range(ptr.to_bits(), count) {
+            Some(range) => &self.backing.bytes()[range],
+            None => Self::unmapped_fail(ptr.to_bits(), count),
+        }
     }
     /// Get a slice for reading `count` bytes without a null-page check.
     ///
@@ -405,7 +386,10 @@ impl Mem {
         ptr: Ptr<u8, MUT>,
         count: GuestUSize,
     ) -> &[u8] {
-        &self.bytes()[ptr.to_bits() as usize..][..count as usize]
+        match self.backing.range(ptr.to_bits(), count) {
+            Some(range) => &self.backing.bytes()[range],
+            None => Self::unmapped_fail(ptr.to_bits(), count),
+        }
     }
     /// Get a slice for reading or writing `count` bytes. This is the basic
     /// primitive for safe read-write memory access.
@@ -418,7 +402,10 @@ impl Mem {
         if ptr.to_bits() < self.null_segment_size {
             Self::null_check_fail(ptr.to_bits(), count)
         }
-        &mut self.bytes_mut()[ptr.to_bits() as usize..][..count as usize]
+        match self.backing.range(ptr.to_bits(), count) {
+            Some(range) => &mut self.backing.bytes_mut()[range],
+            None => Self::unmapped_fail(ptr.to_bits(), count),
+        }
     }
 
     /// Get a pointer for reading an array of `count` elements of type `T`.
@@ -480,11 +467,11 @@ impl Mem {
     ///
     /// Panics if the host pointer is not addressing a location in guest memory.
     pub fn host_ptr_to_guest_ptr(&self, host_ptr: *const std::ffi::c_void) -> ConstVoidPtr {
-        let host_ptr = host_ptr.cast::<u8>();
-        let guest_mem_range = self.bytes().as_ptr_range();
-        assert!(guest_mem_range.contains(&host_ptr));
-        let guest_addr = host_ptr as usize - guest_mem_range.start as usize;
-        Ptr::from_bits(u32::try_from(guest_addr).unwrap())
+        let guest_addr = self
+            .backing
+            .guest_addr_of(host_ptr.cast::<u8>())
+            .expect("Host pointer is not in guest memory");
+        Ptr::from_bits(guest_addr)
     }
 
     /// Read a value for memory. This is the preferred way to read memory in
@@ -516,11 +503,17 @@ impl Mem {
 
     /// C-style `memmove`.
     pub fn memmove(&mut self, dest: MutVoidPtr, src: ConstVoidPtr, size: GuestUSize) {
-        let src = src.to_bits() as usize;
-        let dest = dest.to_bits() as usize;
-        let size = size as usize;
-        self.bytes_mut()
-            .copy_within(src..src.checked_add(size).unwrap(), dest)
+        let src_range = self
+            .backing
+            .range(src.to_bits(), size)
+            .unwrap_or_else(|| Self::unmapped_fail(src.to_bits(), size));
+        let dest_range = self
+            .backing
+            .range(dest.to_bits(), size)
+            .unwrap_or_else(|| Self::unmapped_fail(dest.to_bits(), size));
+        self.backing
+            .bytes_mut()
+            .copy_within(src_range, dest_range.start)
     }
 
     /// Allocate `size` bytes.
@@ -623,6 +616,18 @@ impl Mem {
     /// Permanently mark a region of address space as being unusable to the
     /// memory allocator.
     pub fn reserve(&mut self, base: VAddr, size: GuestUSize) {
+        self.backing.map(base, size);
+        if backing::COMPACT {
+            // The allocator only manages the heap in this mode, and the heap
+            // is not available for anything else.
+            let (heap_base, heap_size) = backing::HEAP.unwrap();
+            let end = u64::from(base) + u64::from(size);
+            assert!(
+                end <= u64::from(heap_base) || base >= heap_base + heap_size,
+                "Can't reserve {base:#x} ({size:#x} bytes): it overlaps the heap"
+            );
+            return;
+        }
         self.allocator.reserve(allocator::Chunk::new(base, size));
     }
 }

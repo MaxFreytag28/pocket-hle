@@ -40,3 +40,5 @@ DUMP.txt
 /*.png
 /*.exe
 /*.bat
+/web-dist/
+/web-shots/

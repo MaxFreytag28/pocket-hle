@@ -65,15 +65,18 @@
 
 pub mod gles1_native;
 pub mod gles1_on_gl2;
+pub mod gles1_on_gles2;
 mod gles_generic;
 pub mod present;
 mod util;
 
 use touchHLE_gl_bindings::gl21compat as gl21compat_raw;
 pub use touchHLE_gl_bindings::gles11 as gles11_raw;
+use touchHLE_gl_bindings::gles20 as gles20_raw;
 
 use gles1_native::GLES1Native;
 use gles1_on_gl2::GLES1OnGL2;
+use gles1_on_gles2::GLES1OnGLES2;
 pub use gles_generic::GLES;
 
 /// Labels for [GLES] implementations and an abstraction for constructing them.
@@ -83,16 +86,23 @@ pub enum GLESImplementation {
     GLES1Native,
     /// [GLES1OnGL2].
     GLES1OnGL2,
+    /// [GLES1OnGLES2].
+    GLES1OnGLES2,
 }
 impl GLESImplementation {
     /// List of OpenGL ES 1.1 implementations in order of preference.
-    pub const GLES1_IMPLEMENTATIONS: &'static [Self] = &[Self::GLES1Native, Self::GLES1OnGL2];
+    ///
+    /// The GLES2-based one is last because it is the newest and least
+    /// complete, but it is the only one that can work in a web browser.
+    pub const GLES1_IMPLEMENTATIONS: &'static [Self] =
+        &[Self::GLES1Native, Self::GLES1OnGL2, Self::GLES1OnGLES2];
     /// Convert from short name used for command-line arguments. Returns [Err]
     /// if name is not recognized..
     pub fn from_short_name(name: &str) -> Result<Self, ()> {
         match name {
             "gles1_on_gl2" => Ok(Self::GLES1OnGL2),
             "gles1_native" => Ok(Self::GLES1Native),
+            "gles1_on_gles2" => Ok(Self::GLES1OnGLES2),
             _ => Err(()),
         }
     }
@@ -101,6 +111,7 @@ impl GLESImplementation {
         match self {
             Self::GLES1Native => GLES1Native::description(),
             Self::GLES1OnGL2 => GLES1OnGL2::description(),
+            Self::GLES1OnGLES2 => GLES1OnGLES2::description(),
         }
     }
     /// See [GLES::new].
@@ -111,6 +122,7 @@ impl GLESImplementation {
         match self {
             Self::GLES1Native => GLES1Native::new(window).map(boxer),
             Self::GLES1OnGL2 => GLES1OnGL2::new(window).map(boxer),
+            Self::GLES1OnGLES2 => GLES1OnGLES2::new(window).map(boxer),
         }
     }
 }

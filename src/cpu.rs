@@ -65,7 +65,9 @@ enum BackendKind {
 fn backend_kind() -> BackendKind {
     static KIND: OnceLock<BackendKind> = OnceLock::new();
     *KIND.get_or_init(|| {
-        let has_jit = cfg!(feature = "jit");
+        // dynarmic accesses guest memory through a pointer to the whole
+        // address space, which doesn't exist with the compact memory layout.
+        let has_jit = cfg!(feature = "jit") && !crate::mem::COMPACT_MEM;
         let kind = match std::env::var("TOUCHHLE_CPU").as_deref() {
             Ok("interpreter") => BackendKind::Interpreter,
             Ok("lockstep") => BackendKind::Lockstep,

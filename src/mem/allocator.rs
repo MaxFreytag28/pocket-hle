@@ -276,6 +276,29 @@ pub struct Allocator {
 }
 
 impl Allocator {
+    /// Create an allocator that only makes allocations within the given
+    /// chunk. This is for when most of the address space has no memory behind
+    /// it, see [super::backing].
+    #[allow(dead_code)] // which constructor is used depends on the backing
+    pub fn with_heap(heap: Chunk) -> Allocator {
+        let main_thread_stack =
+            Chunk::new(Mem::MAIN_THREAD_STACK_LOW_END, Mem::MAIN_THREAD_STACK_SIZE);
+
+        let mut used_chunks: ChunkMap = Default::default();
+        used_chunks.insert(main_thread_stack);
+
+        let mut unused_chunks: SizeBucketedChunkMap = Default::default();
+        unused_chunks.insert(heap);
+
+        Allocator {
+            used_chunks,
+            unused_chunks,
+        }
+    }
+
+    /// Create an allocator that can use the whole address space, other than
+    /// the main thread's stack.
+    #[allow(dead_code)] // which constructor is used depends on the backing
     pub fn new() -> Allocator {
         let main_thread_stack =
             Chunk::new(Mem::MAIN_THREAD_STACK_LOW_END, Mem::MAIN_THREAD_STACK_SIZE);

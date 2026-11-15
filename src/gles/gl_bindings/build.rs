@@ -51,4 +51,16 @@ fn main() {
     )
     .write_bindings(GlobalGenerator, &mut file)
     .unwrap();
+
+    // OpenGL ES 2.0 is the common ground with WebGL, see gles1_on_gles2.rs.
+    let mut file = File::create(out_dir.join("gles20.rs")).unwrap();
+    Registry::new(
+        Api::Gles2,
+        (2, 0),
+        Profile::Core,
+        Fallbacks::None,
+        ["GL_OES_rgb8_rgba8", "GL_EXT_texture_format_BGRA8888"],
+    )
+    .write_bindings(GlobalGenerator, &mut file)
+    .unwrap();
 }

@@ -128,6 +128,8 @@ pub enum GLVersion {
     GLES11,
     /// OpenGL 2.1 compatibility profile
     GL21Compat,
+    /// OpenGL ES 2.0 (which is also what WebGL provides)
+    GLES20,
 }
 
 pub struct GLContext(sdl2::video::GLContext);
@@ -1084,6 +1086,15 @@ impl Window {
             GLVersion::GL21Compat => {
                 attr.set_context_version(2, 1);
                 attr.set_context_profile(sdl2::video::GLProfile::Compatibility);
+            }
+            GLVersion::GLES20 => {
+                // In a web browser, ask for WebGL 2 (which corresponds to
+                // OpenGL ES 3.0). It is a superset of what we need, and unlike
+                // WebGL 1 it has no restrictions on textures whose sizes
+                // aren't powers of two, which old apps use freely.
+                let major = if cfg!(target_os = "emscripten") { 3 } else { 2 };
+                attr.set_context_version(major, 0);
+                attr.set_context_profile(sdl2::video::GLProfile::GLES);
             }
         }
 
