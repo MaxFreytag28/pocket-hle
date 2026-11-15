@@ -91,6 +91,27 @@
   #hub header .buttons { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
   #hub h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; margin: 6px 0 -6px; }
 
+  .library-heading, .archive-bar, .archive-result { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  #hub .library-heading h2, #archive h2 { margin: 0; }
+  #archive {
+    width: min(560px, calc(100% - 24px)); max-height: 88dvh; padding: 20px;
+    color: var(--text); background: var(--surface); border-radius: 20px;
+  }
+  #archive[open] { display: flex; flex-direction: column; gap: 12px; }
+  #archive::backdrop { background: rgba(0,0,0,.5); }
+  #archive input, #archive select {
+    font: inherit; color: inherit; background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 9px 12px; min-width: 0;
+  }
+  #archive input { width: 100%; }
+  #archive-status, .archive-meta { color: var(--muted); font-size: 13px; }
+  #archive-results { overflow-y: auto; overscroll-behavior: contain; }
+  .archive-result { padding: 11px 2px; border-top: 1px solid var(--border); }
+  .archive-result div { min-width: 0; overflow-wrap: anywhere; }
+  .archive-result small { display: block; }
+  .archive-result button { flex: none; }
+  #archive-message { margin: 0; font-size: 14px; }
+
   #library {
     display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 22px 8px;
   }
@@ -266,7 +287,10 @@
       <ul id="whats-new-list"></ul>
     </div>
 
-    <h2>Library</h2>
+    <div class="library-heading">
+      <h2>Library</h2>
+      <button class="small" id="browse-archive" type="button">Browse archive</button>
+    </div>
     <div id="library">
       <label class="tile add" id="add-tile" tabindex="0">
         <span class="icon">+</span>
@@ -334,6 +358,28 @@
     </div>
   </div>
 
+<dialog id="archive" class="panel" aria-labelledby="archive-title">
+  <div class="archive-bar">
+    <h2 id="archive-title">IPA Archive</h2>
+    <button class="small" id="archive-close" type="button">Close</button>
+  </div>
+  <input id="archive-search" type="search" placeholder="Search by name or bundle ID" aria-label="Search archive" autofocus>
+  <div class="archive-bar">
+    <select id="archive-device" aria-label="Device">
+      <option value="2">iPhone / iPod touch</option>
+      <option value="4">iPad</option>
+      <option value="0">All devices</option>
+    </select>
+    <span id="archive-status" role="status"></span>
+  </div>
+  <p id="archive-message" role="status" hidden></p>
+  <button class="small" type="button" id="archive-retry" hidden>Retry loading</button>
+  <div id="archive-results"></div>
+  <div class="archive-bar" id="archive-pages" hidden>
+    <button class="small" id="archive-prev" type="button">Previous</button>
+    <button class="small" id="archive-next" type="button">Next</button>
+  </div>
+</dialog>
 <script>
 'use strict';
 const statusEl = document.getElementById('status');
@@ -844,7 +890,7 @@ async function appStore(mode, action) {
     const transaction = db.transaction('apps', mode);
     const result = action(transaction.objectStore('apps'));
     transaction.oncomplete = () => resolve(result && result.result);
-    transaction.onerror = () => reject(transaction.error);
+    transaction.onerror = (event) => reject(event.target.error || transaction.error);
     transaction.onabort = () => reject(transaction.error);
   });
 }
@@ -1265,8 +1311,9 @@ async function resetProgress(bundleId) {
 }
 
 // Version and what changed in it, shown once after each update.
-const VERSION = '2026.11.15.4';
+const VERSION = '2026.11.16.1';
 const WHATS_NEW = [
+  'Browse the IPA Archive from your library and import a game directly.',
   'Games now save when you switch away from the app, like on old iPhones: the game closes and starts again when you come back.',
   'Snail Mail is drawn at 3x resolution, so its edges are sharp.',
   'Snail Mail no longer freezes after the intro, and its intro and levels draw correctly.',
@@ -1405,18 +1452,21 @@ showLibrary().then((apps) => {
 addTile.addEventListener('keydown', (event) => {
   if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); pickEl.click(); }
 });
+async function keepGame(file, replace) {
+  if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+  const details = await appDetails(file);
+  const game = { name: file.name, bytes: file, ...details };
+  await appStore('readwrite', (store) => replace ? store.put(game, file.name) : store.add(game, file.name));
+  await showLibrary();
+  setStatus(appTitle(game) + ' was added. Tap it to play.');
+}
 pickEl.addEventListener('change', async () => {
   const file = pickEl.files[0];
   pickEl.value = '';
   if (!file) return;
   setStatus('Adding ' + file.name + '…');
   try {
-    // Ask the browser not to clear the library when it is short on space.
-    if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
-    const details = await appDetails(file);
-    await appStore('readwrite', (store) => store.put({ name: file.name, bytes: file, ...details }, file.name));
-    await showLibrary();
-    setStatus(appTitle({ name: file.name, ...details }) + ' was added. Tap it to play.');
+    await keepGame(file, true);
   } catch (e) {
     log('[apps] The app file could not be kept: ' + e);
     setStatus('The file could not be kept in this browser, so it will start once now.');
@@ -1490,6 +1540,7 @@ async function maybeAutoload() {
   start(new Uint8Array(await response.arrayBuffer()), 'test-app.ipa');
 }
 </script>
+<script src="archive.js"></script>
 <script async src="touchHLE.js"></script>
 </body>
 </html>
