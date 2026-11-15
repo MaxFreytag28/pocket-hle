@@ -384,9 +384,9 @@ function fullLog() {
 // end, and leave out the middle.
 function shortLog() {
   const lines = fullLog().split('\n');
-  if (lines.length <= 260) return lines.join('\n');
-  return lines.slice(0, 30).join('\n') + '\n\n[… ' + (lines.length - 230) + ' lines left out …]\n\n' +
-    lines.slice(-200).join('\n');
+  if (lines.length <= 140) return lines.join('\n');
+  return lines.slice(0, 14).join('\n') + '\n\n[… ' + (lines.length - 134) + ' lines left out …]\n\n' +
+    lines.slice(-120).join('\n');
 }
 async function copyLog(button) {
   const text = shortLog();
