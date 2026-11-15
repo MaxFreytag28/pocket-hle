@@ -1,12 +1,18 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. https://mozilla.org/MPL/2.0/.
 (() => {
-  const catalog = 'https://raw.githubusercontent.com/amythiz/ipa-archive-updated/main/data/';
+  const catalogs = [
+    'https://stuffed18.github.io/ipa-archive-updated/data/',
+    'https://raw.githubusercontent.com/amythiz/ipa-archive-updated/main/data/',
+  ];
+  const loaded = new Set();
+  const entries = [];
+  const pathsByCollection = new Map();
   const dialog = document.getElementById('archive');
   const el = (name) => document.getElementById('archive-' + name);
   const results = el('results');
   const pageSize = 24;
-  let entries, matches = [], page = 0, loading = false, transfer;
+  let matches = [], page = 0, loading = false, transfer;
   const imported = new Set();
 
   function message(value) {
@@ -14,7 +20,7 @@
     el('message').hidden = !value;
   }
 
-  async function json(name) {
+  async function json(catalog, name) {
     const response = await fetch(catalog + name);
     if (!response.ok) throw new Error('HTTP ' + response.status);
     return response.json();
@@ -27,49 +33,65 @@
     return parts.join('.');
   }
 
+  async function loadCatalog(catalog) {
+    const [bases, rows] = await Promise.all([json(catalog, 'urls.json'), json(catalog, 'ipa.json')]);
+    for (const [, device, os, title, bundle, version, collection, path, size] of rows) {
+      const base = bases[collection];
+      if (!base?.startsWith('https://archive.org/download/') || !path?.toLowerCase().endsWith('.ipa')) continue;
+      if (!pathsByCollection.has(base)) pathsByCollection.set(base, new Set());
+      const paths = pathsByCollection.get(base);
+      if (paths.has(path)) continue;
+      paths.add(path);
+      const collectionName = base.slice('https://archive.org/download/'.length);
+      entries.push({ device, os, minOS: osVersion(os), title: title || bundle || path, version, base, path, size, collectionName,
+        search: [title, bundle, version, path, collectionName].join(' ').toLowerCase().replace(/[-_]/g, ' ') });
+    }
+    loaded.add(catalog);
+  }
+
   async function load() {
-    if (loading || entries) return;
+    if (loading || loaded.size === catalogs.length) return;
     loading = true;
     el('retry').hidden = true;
     el('status').textContent = 'Loading archive…';
-    message('');
     try {
-      const [bases, rows] = await Promise.all([json('urls.json'), json('ipa.json')]);
-      entries = [];
-      for (const [, device, os, title, bundle, version, collection, path, size] of rows) {
-        const base = bases[collection];
-        if (!base?.startsWith('https://archive.org/download/') || !path?.toLowerCase().endsWith('.ipa')) continue;
-        const minOS = osVersion(os);
-        const collectionName = base.slice('https://archive.org/download/'.length);
-        entries.push({ device, os, minOS, collectionName, title: title || bundle || path, bundle, version, base, path, size,
-          search: [title, bundle, path, collectionName, minOS && 'iphone os ' + minOS,
-            minOS && 'ios ' + minOS].join(' ').toLowerCase() });
+      // Read one catalog at a time to limit peak memory on phones.
+      for (const catalog of catalogs) {
+        if (!loaded.has(catalog)) await loadCatalog(catalog).catch(error => console.warn('Archive index:', error));
       }
-      const versions = new Set(entries.map(game => game.os).filter(Boolean));
-      for (const os of [...versions].sort((a, b) => a - b)) {
-        el('os').add(new Option('Min. iOS ' + osVersion(os), String(os)));
+      const select = el('os');
+      const selected = select.value;
+      const versions = new Set([...select.options].map(option => Number(option.value)));
+      for (const game of entries) if (game.os) versions.add(game.os);
+      select.length = 1;
+      for (const os of [...versions].filter(Boolean).sort((a, b) => a - b)) {
+        select.add(new Option('Min. iOS ' + osVersion(os), String(os)));
       }
+      select.value = selected;
       filter();
-    } catch (error) {
-      entries = undefined;
-      el('status').textContent = '';
-      message('Could not load the archive. Check your connection and try again.');
-      el('retry').hidden = false;
+      if (loaded.size < catalogs.length) {
+        el('retry').textContent = loaded.size ? 'Partial catalog · Retry missing index' : 'Catalog unavailable · Retry';
+        if (!loaded.size) el('status').textContent = '';
+        el('retry').hidden = false;
+      } else {
+        pathsByCollection.clear();
+      }
     } finally {
       loading = false;
     }
   }
 
   function filter() {
-    if (!entries) return;
+    if (!loaded.size && loading) return;
     const device = Number(el('device').value);
     const os = Number(el('os').value);
     const query = el('search').value.trim().toLowerCase();
     const osQuery = /^(?:iphone\s+os|ios|os)\s*(\d+(?:\.\d+){0,2})$/.exec(query);
+    const words = query.replace(/[-_]/g, ' ').split(/\s+/).filter(Boolean);
     matches = entries.filter(game => {
       if ((device && !(game.device & device)) || (os && game.os !== os)) return false;
       if (osQuery) return game.minOS === osQuery[1] || game.minOS.startsWith(osQuery[1] + '.');
-      return game.search.includes(query);
+      return words.every(word => game.search.includes(word));
     });
     page = 0;
     render();
@@ -141,7 +163,7 @@
   document.getElementById('browse-archive').addEventListener('click', () => {
     dialog.showModal();
     if (!transfer) { imported.clear(); message(''); }
-    if (entries) filter(); else load();
+    if (loaded.size === catalogs.length) filter(); else load();
   });
   el('close').onclick = () => dialog.close();
   dialog.addEventListener('close', () => transfer?.abort());
