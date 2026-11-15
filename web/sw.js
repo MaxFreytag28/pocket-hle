@@ -10,7 +10,7 @@
 // network as usual (so an updated build is picked up straight away) and a
 // copy is kept. Offline, the copy is used.
 
-const CACHE = 'pocket-hle-v1';
+const CACHE = 'pocket-hle-v2';
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => {
@@ -33,7 +33,11 @@ self.addEventListener('fetch', (event) => {
   event.respondWith((async () => {
     const cache = await caches.open(CACHE);
     try {
-      const response = await fetch(request);
+      // Ask the server whether the file changed instead of letting the
+      // browser reuse its own copy, which GitHub Pages allows for 10 minutes
+      // and which made a start after an update show the old version. An
+      // unchanged file costs only a short reply.
+      const response = await fetch(request.url, { cache: 'no-cache', credentials: 'same-origin' });
       if (response.ok) cache.put(request, response.clone());
       return response;
     } catch (error) {

@@ -237,7 +237,10 @@ function keepLog() {
   try { localStorage.setItem(LAST_LOG_KEY, logLines.join('\n').slice(-400000)); } catch (e) { /* full or no storage */ }
 }
 // The log of this page load if a game has run in it, otherwise of the last run.
-function fullLog() { return started || !lastRunLog ? logLines.join('\n') : lastRunLog; }
+function fullLog() {
+  if (started || !lastRunLog) return logLines.join('\n');
+  return lastRunLog + '\n\n[this page]\n' + logLines.join('\n');
+}
 
 async function copyLog(button) {
   const text = fullLog();
@@ -279,9 +282,20 @@ if (lastRunLog) document.getElementById('log-note').textContent = 'from the last
 let gameOrientation = 'landscape';
 function lockOrientation(orientation) {
   try {
-    if (screen.orientation && screen.orientation.lock) screen.orientation.lock(orientation).catch(() => {});
-  } catch (e) { /* not supported */ }
+    if (screen.orientation && screen.orientation.lock) {
+      screen.orientation.lock(orientation).then(
+        () => log('[orientation] locked to ' + orientation),
+        (e) => log('[orientation] could not lock to ' + orientation + ': ' + (e && e.name || e)));
+    } else {
+      log('[orientation] this browser cannot lock the orientation');
+    }
+  } catch (e) {
+    log('[orientation] ' + e);
+  }
 }
+log('[device] ' + navigator.userAgent + ' | installed: ' +
+  (matchMedia('(display-mode: standalone)').matches || navigator.standalone === true) +
+  ' | orientation: ' + (screen.orientation ? screen.orientation.type : 'unknown'));
 function requestFullscreen() {
   const request = document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen;
   let fullscreen = Promise.resolve();
@@ -847,7 +861,18 @@ async function start(bytes, name) {
 // Offline support and installation to the home screen. Service workers need
 // a secure origin (https, or localhost during development).
 if ('serviceWorker' in navigator && !params.has('debug')) {
-  navigator.serviceWorker.register('sw.js').catch((e) => log('[offline] ' + e));
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register('sw.js').then((registration) => {
+    // An installed app is often resumed rather than started afresh, so look
+    // for a new version whenever the hub comes back into view.
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && !started) registration.update().catch(() => {});
+    });
+  }).catch((e) => log('[offline] ' + e));
+  // A new version took over: show it, unless a game is running.
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (hadController && !started) location.reload();
+  });
 }
 
 // For development: with ?autoload in the address, an app file placed next to
