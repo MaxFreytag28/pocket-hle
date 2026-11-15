@@ -74,6 +74,8 @@
     display: flex; align-items: center; justify-content: center;
     color: #fff; font-size: 26px; font-weight: 700; letter-spacing: 0.02em;
   }
+  .tile .icon { overflow: hidden; }
+  .tile .icon img { width: 100%; height: 100%; display: block; object-fit: cover; }
   .tile .name { font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
   .tile.add { border-style: dashed; color: var(--muted); justify-content: center; }
   .tile.add .icon { background: transparent; border: 2px dashed var(--border); color: var(--muted); font-weight: 400; font-size: 34px; }
@@ -109,7 +111,8 @@
      element to attach its mouse, touch and keyboard listeners to. */
   #canvas {
     background: #000; display: block;
-    width: min(100vw, calc(100dvh * 1.5)); height: auto; aspect-ratio: 3 / 2;
+    /* --aspect follows the shape of the emulated screen: see watchScreenShape. */
+    width: min(100vw, calc(100dvh * var(--aspect, 1.5))); height: auto; aspect-ratio: var(--aspect, 1.5);
     image-rendering: pixelated; touch-action: none; outline: none;
     -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
   }
@@ -269,13 +272,41 @@ if (lastRunLog) document.getElementById('log-note').textContent = 'from the last
 // The browser's fullscreen and orientation lock, where they exist, to get rid
 // of the browser's bars. This has to be asked for while handling a tap.
 let gameOrientation = 'landscape';
+function lockOrientation(orientation) {
+  try {
+    if (screen.orientation && screen.orientation.lock) screen.orientation.lock(orientation).catch(() => {});
+  } catch (e) { /* not supported */ }
+}
 function requestFullscreen() {
   const request = document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen;
-  if (!request) return;
-  Promise.resolve(request.call(document.documentElement))
-    .then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock(gameOrientation))
-    .catch(() => { /* not allowed or not supported: the layout still fills the window */ });
+  let fullscreen = Promise.resolve();
+  try {
+    if (request) fullscreen = Promise.resolve(request.call(document.documentElement));
+  } catch (e) { /* not allowed */ }
+  // Installed apps can turn the screen without being fullscreen too.
+  fullscreen.catch(() => {}).then(() => lockOrientation(gameOrientation));
 }
+// The hub is upright. In an installed app, the turn asked for by a game
+// outlasts reloading the page, so this also undoes that after leaving one.
+lockOrientation('portrait');
+
+// The emulated screen can be an iPhone's or an iPad's, upright or on its side,
+// and apps can turn it while running. The emulator resizes the canvas to
+// match; the layout and the orientation asked of the device follow that.
+function watchScreenShape() {
+  const canvas = document.getElementById('canvas');
+  const update = () => {
+    if (!canvas.width || !canvas.height) return;
+    canvas.style.setProperty('--aspect', String(canvas.width / canvas.height));
+    const wanted = canvas.width >= canvas.height ? 'landscape' : 'portrait';
+    if (wanted === gameOrientation) return;
+    gameOrientation = wanted;
+    if (document.body.classList.contains('playing')) lockOrientation(gameOrientation);
+  };
+  new MutationObserver(update).observe(canvas, { attributes: true, attributeFilter: ['width', 'height'] });
+  update();
+}
+watchScreenShape();
 
 // The menu over a running game. `message` is set when the game has stopped.
 function showGameMenu(message) {
@@ -505,13 +536,152 @@ async function listApps() {
       // Entries by an earlier version of this page are all under the key
       // "last"; a file added again since then takes precedence.
       if (!apps.has(cursor.value.name) || cursor.key !== 'last') {
-        apps.set(cursor.value.name, cursor.key);
+        apps.set(cursor.value.name, { key: cursor.key, icon: cursor.value.icon });
       }
       cursor.continue();
     };
   });
-  return [...apps].map(([name, key]) => ({ name, key }))
+  return [...apps].map(([name, info]) => ({ name, key: info.key, icon: info.icon }))
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+}
+
+// App icons, read from the app file itself. An .ipa is a zip file; only the
+// parts that are needed are read from it.
+async function inflateRaw(data) {
+  const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+async function zipEntries(blob) {
+  const tailSize = Math.min(blob.size, 65557);
+  const tail = new DataView(await blob.slice(blob.size - tailSize).arrayBuffer());
+  let end = -1;
+  for (let i = tailSize - 22; i >= 0; i--) {
+    if (tail.getUint32(i, true) === 0x06054b50) { end = i; break; }
+  }
+  if (end < 0) return [];
+  const count = tail.getUint16(end + 10, true);
+  const dirSize = tail.getUint32(end + 12, true);
+  const dirOffset = tail.getUint32(end + 16, true);
+  const dir = new DataView(await blob.slice(dirOffset, dirOffset + dirSize).arrayBuffer());
+  const decoder = new TextDecoder();
+  const entries = [];
+  for (let i = 0, p = 0; i < count && p + 46 <= dir.byteLength; i++) {
+    if (dir.getUint32(p, true) !== 0x02014b50) break;
+    const nameLength = dir.getUint16(p + 28, true);
+    entries.push({
+      method: dir.getUint16(p + 10, true),
+      compressedSize: dir.getUint32(p + 20, true),
+      size: dir.getUint32(p + 24, true),
+      offset: dir.getUint32(p + 42, true),
+      name: decoder.decode(new Uint8Array(dir.buffer, p + 46, nameLength)),
+    });
+    p += 46 + nameLength + dir.getUint16(p + 30, true) + dir.getUint16(p + 32, true);
+  }
+  return entries;
+}
+async function zipRead(blob, entry) {
+  const header = new DataView(await blob.slice(entry.offset, entry.offset + 30).arrayBuffer());
+  const start = entry.offset + 30 + header.getUint16(26, true) + header.getUint16(28, true);
+  const data = blob.slice(start, start + entry.compressedSize);
+  if (entry.method === 0) return new Uint8Array(await data.arrayBuffer());
+  if (entry.method === 8) return inflateRaw(data);
+  throw new Error('unsupported compression');
+}
+// Icons inside apps are usually PNGs that Xcode "optimised" for the iPhone
+// (with a CgBI chunk): blue and red swapped, premultiplied alpha, and no zlib
+// header. Browsers can't show those, so they are decoded here.
+async function decodeIphonePng(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let width = 0, height = 0, ok = false, iphone = false;
+  const data = [];
+  for (let p = 8; p + 8 <= bytes.length;) {
+    const length = view.getUint32(p);
+    const type = String.fromCharCode(...bytes.subarray(p + 4, p + 8));
+    if (type === 'CgBI') iphone = true;
+    else if (type === 'IHDR') {
+      width = view.getUint32(p + 8);
+      height = view.getUint32(p + 12);
+      // 8-bit RGBA, not interlaced: what Xcode makes.
+      ok = bytes[p + 16] === 8 && bytes[p + 17] === 6 && bytes[p + 20] === 0;
+    } else if (type === 'IDAT') data.push(bytes.subarray(p + 8, p + 8 + length));
+    else if (type === 'IEND') break;
+    p += 12 + length;
+  }
+  if (!iphone) return createImageBitmap(new Blob([bytes]));
+  if (!ok) throw new Error('unusual icon format');
+  const raw = await inflateRaw(new Blob(data));
+  const stride = width * 4;
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  let previous = new Uint8Array(stride);
+  for (let y = 0, q = 0; y < height; y++) {
+    const filter = raw[q++];
+    const line = new Uint8Array(stride);
+    for (let x = 0; x < stride; x++, q++) {
+      const a = x >= 4 ? line[x - 4] : 0, b = previous[x], c = x >= 4 ? previous[x - 4] : 0;
+      let value = raw[q];
+      if (filter === 1) value += a;
+      else if (filter === 2) value += b;
+      else if (filter === 3) value += (a + b) >> 1;
+      else if (filter === 4) {
+        const estimate = a + b - c;
+        const pa = Math.abs(estimate - a), pb = Math.abs(estimate - b), pc = Math.abs(estimate - c);
+        value += pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+      }
+      line[x] = value;
+    }
+    for (let x = 0; x < width; x++) {
+      const i = x * 4, o = y * stride + i, alpha = line[i + 3];
+      const scale = alpha ? 255 / alpha : 0;
+      pixels[o] = line[i + 2] * scale;
+      pixels[o + 1] = line[i + 1] * scale;
+      pixels[o + 2] = line[i] * scale;
+      pixels[o + 3] = alpha;
+    }
+    previous = line;
+  }
+  return createImageBitmap(new ImageData(pixels, width, height));
+}
+// The app's icon as a small image (a data: URL), or '' if it has none.
+async function appIcon(blob) {
+  const entries = await zipEntries(blob);
+  const appFile = /^Payload\/[^/]+\.app\/([^/]+)$/;
+  let best = null, bestScore = 0;
+  for (const entry of entries) {
+    let score = 0;
+    // The large icon for iTunes, if the file still has it.
+    if (entry.name === 'iTunesArtwork') score = 1e12;
+    else {
+      const match = appFile.exec(entry.name);
+      if (match && /icon.*\.png$/i.test(match[1])) {
+        score = entry.size * (/small|settings/i.test(match[1]) ? 0.01 : 1);
+      }
+    }
+    if (score > bestScore) { best = entry; bestScore = score; }
+  }
+  if (!best) return '';
+  const bitmap = await decodeIphonePng(await zipRead(blob, best));
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 144;
+  canvas.getContext('2d').drawImage(bitmap, 0, 0, 144, 144);
+  return canvas.toDataURL('image/png');
+}
+async function fillMissingIcons(apps) {
+  let found = false;
+  for (const app of apps) {
+    if (app.icon !== undefined) continue;
+    try {
+      const entry = await appStore('readonly', (store) => store.get(app.key));
+      entry.icon = await appIcon(entry.bytes).catch((e) => {
+        log('[apps] No icon for ' + app.name + ': ' + e);
+        return '';
+      });
+      await appStore('readwrite', (store) => store.put(entry, app.key));
+      if (entry.icon) found = true;
+    } catch (e) {
+      log('[apps] ' + e);
+    }
+  }
+  if (found) showLibrary();
 }
 
 function displayName(fileName) { return fileName.replace(/\.ipa$/i, ''); }
@@ -523,8 +693,7 @@ function tileFor(app) {
   tile.setAttribute('role', 'button');
   tile.setAttribute('aria-label', 'Play ' + title);
 
-  // A plain coloured badge with the name's initials. (App icons in .ipa files
-  // are in a format browsers can't show.)
+  // The app's own icon, or else a coloured badge with the name's initials.
   const icon = document.createElement('span');
   icon.className = 'icon';
   let hash = 0;
@@ -533,6 +702,13 @@ function tileFor(app) {
   const words = title.replace(/(\p{Ll})(\p{Lu})/gu, '$1 $2').split(/[^\p{L}\p{N}]+/u)
     .filter((w) => /^\p{L}/u.test(w));
   icon.textContent = (words.length > 1 ? words[0][0] + words[1][0] : title.slice(0, 2)).toUpperCase();
+  if (app.icon) {
+    const img = document.createElement('img');
+    img.src = app.icon;
+    img.alt = '';
+    icon.textContent = '';
+    icon.append(img);
+  }
 
   const name = document.createElement('span');
   name.className = 'name';
@@ -567,6 +743,7 @@ async function showLibrary() {
   }
   for (const tile of [...libraryEl.querySelectorAll('.tile:not(.add)')]) tile.remove();
   for (const app of apps) libraryEl.insertBefore(tileFor(app), addTile);
+  fillMissingIcons(apps);
   return apps;
 }
 showLibrary();
@@ -582,7 +759,8 @@ pickEl.addEventListener('change', async () => {
   try {
     // Ask the browser not to clear the library when it is short on space.
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
-    await appStore('readwrite', (store) => store.put({ name: file.name, bytes: file }, file.name));
+    const icon = await appIcon(file).catch(() => '');
+    await appStore('readwrite', (store) => store.put({ name: file.name, bytes: file, icon }, file.name));
     await showLibrary();
     setStatus(displayName(file.name) + ' was added. Tap it to play.');
   } catch (e) {
