@@ -415,6 +415,12 @@ pub(super) fn exit(env: &mut Environment) {
         let _: () = msg![env; pool drain];
     };
 
+    // Apps may still change their settings in applicationWillTerminate:.
+    if !env.is_fake {
+        let user_defaults: id = msg_class![env; NSUserDefaults standardUserDefaults];
+        let _: bool = msg![env; user_defaults synchronize];
+    }
+
     std::process::exit(0);
 }
 

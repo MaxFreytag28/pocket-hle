@@ -134,6 +134,14 @@ pub fn handle_events(env: &mut Environment) -> Option<Instant> {
                 log!("Handling app-will-resign-active event: exiting.");
                 ui_application::exit(env);
             }
+            Event::WebPageHidden => {
+                // Like switching apps on iPhone OS before version 4: the app
+                // is closed properly, which is when many apps of that time
+                // save (and some can't cope with being paused and resumed).
+                // The page starts it again when it comes back into view.
+                log!("The page went into the background: closing the app, so that it saves.");
+                ui_application::exit(env);
+            }
             Event::AppWillTerminate => {
                 log!("Handling app-will-terminate event.");
                 ui_application::exit(env);

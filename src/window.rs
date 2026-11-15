@@ -139,6 +139,10 @@ pub enum Event {
     /// OS has informed touchHLE it will soon terminate.
     /// (iOS `applicationWillTerminate:`, Android `onDestroy()`)
     AppWillTerminate,
+    /// The page went into the background (browser only). The app is closed
+    /// properly, which is when many apps save their progress: a page can be
+    /// closed at any time after this without warning.
+    WebPageHidden,
     TouchesDown(HashMap<FingerId, Coords>),
     TouchesMove(HashMap<FingerId, Coords>),
     TouchesUp(HashMap<FingerId, Coords>),
@@ -813,6 +817,33 @@ impl Window {
         #[cfg(target_os = "emscripten")]
         for text_event in web_text_input::take_events() {
             self.event_queue.push_back(Event::TextInput(text_event));
+        }
+
+        // For testing the browser's background handling on desktop:
+        // TOUCHHLE_TEST_PAUSE_AT=<seconds> acts as if the page went into the
+        // background at that time after start.
+        #[cfg(not(target_os = "emscripten"))]
+        {
+            use std::sync::atomic::{AtomicU8, Ordering};
+            use std::sync::OnceLock;
+            static STARTED: OnceLock<Instant> = OnceLock::new();
+            static STAGE: AtomicU8 = AtomicU8::new(0);
+            let started = *STARTED.get_or_init(Instant::now);
+            if let Some(at) = env::var("TOUCHHLE_TEST_PAUSE_AT")
+                .ok()
+                .and_then(|value| value.parse::<f64>().ok())
+            {
+                let elapsed = started.elapsed().as_secs_f64();
+                if elapsed >= at && STAGE.load(Ordering::Relaxed) == 0 {
+                    STAGE.store(1, Ordering::Relaxed);
+                    self.event_queue.push_back(Event::WebPageHidden);
+                }
+            }
+        }
+
+        #[cfg(target_os = "emscripten")]
+        if web_lifecycle::page_hidden() {
+            self.event_queue.push_back(Event::WebPageHidden);
         }
 
         if controller_updated {
@@ -1596,3 +1627,23 @@ mod web_motion {
     }
 }
 
+
+#[cfg(target_os = "emscripten")]
+mod web_lifecycle {
+    //! The page going into the background (see
+    //! `Module.pocketHleTakePageHidden` in web/index.html).
+    use std::ffi::{c_char, CStr};
+
+    extern "C" {
+        fn emscripten_run_script_string(script: *const c_char) -> *const c_char;
+    }
+
+    /// Whether the page went into the background since the last call.
+    pub fn page_hidden() -> bool {
+        let script = c"Module.pocketHleTakePageHidden ? Module.pocketHleTakePageHidden() : ''";
+        unsafe {
+            let ptr = emscripten_run_script_string(script.as_ptr());
+            !ptr.is_null() && CStr::from_ptr(ptr).to_bytes() == b"1"
+        }
+    }
+}

@@ -668,7 +668,15 @@ var Module = {
   canvas: document.getElementById('canvas'),
   print: log,
   printErr: log,
-  onExit: (code) => gameStopped('The game has exited (code ' + code + ').'),
+  onExit: (code) => {
+    storeSavesNow();
+    if (closedForBackground) {
+      keepLog();
+      if (!document.hidden) location.reload();
+      return;
+    }
+    gameStopped('The game has exited (code ' + code + ').');
+  },
   // Text input: see the web_text_input module in src/window.rs.
   pocketHleTextInput: (active) => {
     textPanel.hidden = !active;
@@ -720,6 +728,33 @@ function requestMotion() {
   }
 }
 Module.pocketHleMotion = () => motion || '';
+
+// When the page goes into the background, the game is closed properly, like
+// switching apps before iPhone OS 4: that is when many games of that time
+// save (see web_lifecycle in src/window.rs). The page may be closed at any
+// moment after this without warning, so the saves are stored straight away.
+// When the page comes back, the game starts again.
+const RESUME_KEY = 'pocket-hle-resume';
+let pageHidden = false;
+let closedForBackground = false;
+function onPageHidden() {
+  if (started && !stoppedMessage) pageHidden = true;
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    onPageHidden();
+  } else if (closedForBackground) {
+    location.reload();
+  }
+});
+window.addEventListener('pagehide', onPageHidden);
+Module.pocketHleTakePageHidden = () => {
+  if (!pageHidden) return '';
+  pageHidden = false;
+  closedForBackground = true;
+  try { if (currentApp) sessionStorage.setItem(RESUME_KEY, currentApp.key); } catch (e) { /* no storage */ }
+  return '1';
+};
 
 // Saved data. touchHLE keeps each app's files (its "sandbox") in this folder.
 // Here it is backed by IndexedDB, so that it survives closing the page. It
@@ -1212,8 +1247,10 @@ async function resetProgress(bundleId) {
 }
 
 // Version and what changed in it, shown once after each update.
-const VERSION = '2026.11.15.3';
+const VERSION = '2026.11.15.4';
 const WHATS_NEW = [
+  'Games now save when you switch away from the app, like on old iPhones: the game closes and starts again when you come back.',
+  'Snail Mail is drawn at 3x resolution, so its edges are sharp.',
   'Snail Mail no longer freezes after the intro, and its intro and levels draw correctly.',
   'A cleaner, calmer look for the hub.',
   'Tap ⋯ on a game for its details, to rename it, reset its progress or remove it.',
@@ -1338,7 +1375,14 @@ async function showLibrary() {
   fillMissingDetails(apps);
   return apps;
 }
-showLibrary();
+showLibrary().then((apps) => {
+  // Start again the game that was closed when the page went into the
+  // background.
+  let resume = null;
+  try { resume = sessionStorage.getItem(RESUME_KEY); sessionStorage.removeItem(RESUME_KEY); } catch (e) { /* no storage */ }
+  const app = resume && apps.find((candidate) => candidate.key === resume);
+  if (app) launch(app);
+});
 
 addTile.addEventListener('keydown', (event) => {
   if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); pickEl.click(); }
@@ -1364,9 +1408,11 @@ pickEl.addEventListener('change', async () => {
 
 // Start a game from the library. Called while handling a tap, which is what
 // allows going fullscreen.
+let currentApp = null;
 async function launch(app) {
   if (started || launch.busy) return;
   launch.busy = true;
+  currentApp = app;
   requestMotion();
   requestFullscreen();
   try {
