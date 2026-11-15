@@ -313,8 +313,17 @@ function fullLog() {
   return lastRunLog + '\n\n[this page]\n' + logLines.join('\n');
 }
 
+// Long logs don't fit in a chat message, and the end (where things went
+// wrong) matters most: keep the start, which says what ran where, and the
+// end, and leave out the middle.
+function shortLog() {
+  const lines = fullLog().split('\n');
+  if (lines.length <= 260) return lines.join('\n');
+  return lines.slice(0, 30).join('\n') + '\n\n[… ' + (lines.length - 230) + ' lines left out …]\n\n' +
+    lines.slice(-200).join('\n');
+}
 async function copyLog(button) {
-  const text = fullLog();
+  const text = shortLog();
   try {
     await navigator.clipboard.writeText(text);
   } catch (e) {
