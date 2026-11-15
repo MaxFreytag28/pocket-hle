@@ -363,15 +363,18 @@
     <h2 id="archive-title">IPA Archive</h2>
     <button class="small" id="archive-close" type="button">Close</button>
   </div>
-  <input id="archive-search" type="search" placeholder="Search by name or bundle ID" aria-label="Search archive" autofocus>
+  <input id="archive-search" type="search" placeholder="Search title, bundle ID, collection or OS" aria-label="Search archive" autofocus>
   <div class="archive-bar">
     <select id="archive-device" aria-label="Device">
       <option value="2">iPhone / iPod touch</option>
       <option value="4">iPad</option>
       <option value="0">All devices</option>
     </select>
-    <span id="archive-status" role="status"></span>
+    <select id="archive-os" aria-label="Minimum OS">
+      <option value="">Any minimum OS</option>
+    </select>
   </div>
+  <span id="archive-status" role="status"></span>
   <p id="archive-message" role="status" hidden></p>
   <button class="small" type="button" id="archive-retry" hidden>Retry loading</button>
   <div id="archive-results"></div>
@@ -1311,7 +1314,7 @@ async function resetProgress(bundleId) {
 }
 
 // Version and what changed in it, shown once after each update.
-const VERSION = '2026.11.16.1';
+const VERSION = '2026.11.16.2';
 const WHATS_NEW = [
   'Browse the IPA Archive from your library and import a game directly.',
   'Games now save when you switch away from the app, like on old iPhones: the game closes and starts again when you come back.',
