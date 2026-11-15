@@ -29,6 +29,7 @@
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
+  html, body { max-width: 100%; overflow-x: hidden; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
     font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -49,8 +50,9 @@
 
   /* The hub: the start screen, listing the games kept on this device. */
   #hub {
-    max-width: 860px; margin: 0 auto; min-height: 100dvh;
-    padding: 20px max(16px, env(safe-area-inset-right)) 20px max(16px, env(safe-area-inset-left));
+    width: 100%; max-width: 860px; margin: 0 auto; min-height: 100dvh;
+    padding: max(20px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+      max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
     display: flex; flex-direction: column; gap: 16px;
   }
   #hub header h1 { font-size: 22px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
@@ -59,7 +61,7 @@
     font-size: 12px; font-weight: 600; margin: 0; color: var(--muted);
     text-transform: uppercase; letter-spacing: 0.06em;
   }
-  #library { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 12px; }
+  #library { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(132px, 42vw), 1fr)); gap: 12px; }
   .tile {
     position: relative; display: flex; flex-direction: column; align-items: center; gap: 10px;
     padding: 16px 10px 12px; border-radius: 12px; cursor: pointer; text-align: center;
@@ -266,11 +268,12 @@ if (lastRunLog) document.getElementById('log-note').textContent = 'from the last
 
 // The browser's fullscreen and orientation lock, where they exist, to get rid
 // of the browser's bars. This has to be asked for while handling a tap.
+let gameOrientation = 'landscape';
 function requestFullscreen() {
   const request = document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen;
   if (!request) return;
   Promise.resolve(request.call(document.documentElement))
-    .then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape'))
+    .then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock(gameOrientation))
     .catch(() => { /* not allowed or not supported: the layout still fills the window */ });
 }
 
