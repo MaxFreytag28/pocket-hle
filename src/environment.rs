@@ -1477,7 +1477,11 @@ mod tick_stats {
 
     fn enabled() -> bool {
         static ENABLED: OnceLock<bool> = OnceLock::new();
-        *ENABLED.get_or_init(|| std::env::var_os("TOUCHHLE_TICK_STATS").is_some())
+        // Always on in the browser, where the page's log is the only way to
+        // see how hard the device is working.
+        *ENABLED.get_or_init(|| {
+            cfg!(target_os = "emscripten") || std::env::var_os("TOUCHHLE_TICK_STATS").is_some()
+        })
     }
 
     pub fn start() -> Option<Instant> {
@@ -1495,7 +1499,8 @@ mod tick_stats {
         let mut last = LAST.lock().unwrap();
         let (last_time, last_total, last_cpu_nanos) = *last.get_or_insert((now, total, cpu_nanos));
         let elapsed = now.duration_since(last_time).as_secs_f64();
-        if elapsed >= 2.0 {
+        let interval = if cfg!(target_os = "emscripten") { 10.0 } else { 2.0 };
+        if elapsed >= interval {
             let ticks = (total - last_total) as f64;
             let cpu_seconds = (cpu_nanos - last_cpu_nanos) as f64 / 1e9;
             echo!(

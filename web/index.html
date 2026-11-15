@@ -571,9 +571,10 @@ for (const type of ['keydown', 'keypress', 'keyup']) {
 // A line in the log every 10 seconds while a game runs, saying how much it
 // drew and how many taps reached it. When a game seems frozen, this tells
 // whether the game stopped or only the picture did.
-// It also reports graphics errors: texture uploads are always checked, other
-// calls during one second out of every ten (checking is slow).
-const heartbeat = { draws: 0, taps: 0, frames: 0, checking: true, errors: new Map() };
+// It also reports graphics errors. Asking for them makes the game wait for the
+// graphics chip, so only texture uploads (rare) are checked one by one;
+// otherwise the check happens once per line.
+const heartbeat = { draws: 0, taps: 0, frames: 0, checking: false, errors: new Map(), context: null };
 const GL_ALWAYS_CHECKED = new Set(['texImage2D', 'texSubImage2D', 'compressedTexImage2D', 'renderbufferStorage', 'framebufferRenderbuffer', 'framebufferTexture2D']);
 for (const Context of [window.WebGL2RenderingContext, window.WebGLRenderingContext]) {
   if (!Context) continue;
@@ -585,7 +586,7 @@ for (const Context of [window.WebGL2RenderingContext, window.WebGLRenderingConte
     const isDraw = name === 'drawArrays' || name === 'drawElements';
     const always = GL_ALWAYS_CHECKED.has(name);
     Context.prototype[name] = function (...args) {
-      if (isDraw) heartbeat.draws++;
+      if (isDraw) { heartbeat.draws++; heartbeat.context = this; }
       const result = original.apply(this, args);
       if (always || heartbeat.checking) {
         const error = this.getError();
@@ -598,11 +599,6 @@ for (const Context of [window.WebGL2RenderingContext, window.WebGLRenderingConte
     };
   }
 }
-setInterval(() => {
-  heartbeat.checking = true;
-  setTimeout(() => { heartbeat.checking = false; }, 1000);
-}, 10000);
-setTimeout(() => { heartbeat.checking = false; }, 1000);
 document.getElementById('canvas').addEventListener('webglcontextlost', () => {
   log('[graphics] The browser dropped the graphics context: nothing more can be drawn.');
 });
@@ -613,6 +609,8 @@ document.getElementById('canvas').addEventListener('pointerdown', () => { heartb
 (function countFrames() { heartbeat.frames++; requestAnimationFrame(countFrames); })();
 setInterval(() => {
   if (!document.body.classList.contains('playing')) return;
+  const error = heartbeat.context && heartbeat.context.getError();
+  if (error) heartbeat.errors.set('since last line 0x' + error.toString(16), 1);
   log('[heartbeat] last 10 s: ' + heartbeat.draws + ' draw calls, ' + heartbeat.frames +
     ' screen updates, ' + heartbeat.taps + ' taps' + (document.hidden ? ' (page hidden)' : '') +
     (heartbeat.errors.size ? ' | graphics errors: ' +
