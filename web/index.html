@@ -327,6 +327,7 @@
       <dl id="info-details"></dl>
       <button class="primary" id="info-play" type="button">Play</button>
       <button class="small" id="info-rename" type="button">Rename</button>
+      <button class="small" id="info-export" type="button" disabled>Share IPA</button>
       <button class="small" id="info-reset" type="button">Reset progress</button>
       <button class="small danger" id="info-remove" type="button">Remove from this device</button>
       <button class="small" id="info-close" type="button">Close</button>
@@ -1240,8 +1241,11 @@ document.addEventListener('touchmove', (event) => { if (drag) event.preventDefau
 // The details of a game.
 const infoEl = document.getElementById('info');
 let infoApp = null;
+let infoExportFile = null;
+const infoExportButton = document.getElementById('info-export');
 function openInfo(app) {
   infoApp = app;
+  prepareIpaExport(app);
   fillIcon(document.getElementById('info-icon'), app);
   document.getElementById('info-title').textContent = appTitle(app);
   const [level, note] = compatibility(app);
@@ -1268,7 +1272,67 @@ function openInfo(app) {
 function closeInfo() {
   infoEl.hidden = true;
   infoApp = null;
+  infoExportFile = null;
 }
+// Read the original file before the share tap: native sharing needs the
+// tap's user activation, which can expire while waiting for IndexedDB.
+async function prepareIpaExport(app) {
+  infoExportFile = null;
+  infoExportButton.disabled = true;
+  infoExportButton.textContent = 'Preparing IPA…';
+  try {
+    const entry = await appStore('readonly', (store) => store.get(app.key));
+    if (!entry || !(entry.bytes instanceof Blob)) throw new Error('The IPA is no longer on this device.');
+    const file = new File([entry.bytes], entry.name, { type: 'application/octet-stream' });
+    if (infoApp !== app) return;
+    infoExportFile = file;
+    infoExportButton.textContent = 'Share IPA';
+    infoExportButton.disabled = false;
+  } catch (e) {
+    if (infoApp !== app) return;
+    infoExportButton.textContent = 'IPA unavailable';
+    log('[apps] Could not prepare IPA export: ' + e);
+    setStatus('The IPA could not be read. Try adding its file again.');
+  }
+}
+function downloadIpa(file) {
+  const url = URL.createObjectURL(file);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = file.name;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  // Give the browser time to begin reading the file before releasing it.
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  setStatus('IPA download started: ' + file.name);
+}
+infoExportButton.addEventListener('click', async () => {
+  const app = infoApp;
+  const file = infoExportFile;
+  if (!app || !file || infoExportButton.disabled) return;
+  infoExportButton.disabled = true;
+  try {
+    const data = { files: [file] };
+    if (navigator.share && navigator.canShare && navigator.canShare(data)) {
+      try {
+        await navigator.share(data);
+        setStatus('IPA shared: ' + file.name);
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        log('[apps] Native IPA sharing failed, downloading instead: ' + e);
+        downloadIpa(file);
+      }
+    } else {
+      downloadIpa(file);
+    }
+  } catch (e) {
+    log('[apps] Could not export IPA: ' + e);
+    setStatus('The IPA could not be exported. Please try again.');
+  } finally {
+    if (infoApp === app) infoExportButton.disabled = false;
+  }
+});
 infoEl.addEventListener('click', (event) => { if (event.target === infoEl) closeInfo(); });
 document.getElementById('info-close').addEventListener('click', closeInfo);
 document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !infoEl.hidden) closeInfo(); });
@@ -1326,8 +1390,9 @@ async function resetProgress(bundleId) {
 }
 
 // Version and what changed in it, shown once after each update.
-const VERSION = '2026.11.16.3';
+const VERSION = '2026.11.16.4';
 const WHATS_NEW = [
+  'Share a game’s original IPA from its ⋯ menu, or download it when file sharing is unavailable.',
   'Archive search now includes both catalogs, with early iPhone OS filters available immediately.',
   'Your library shows 20 games per page. Hold a game to rearrange it.',
 ];
