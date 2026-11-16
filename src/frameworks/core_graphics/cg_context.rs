@@ -13,7 +13,6 @@ use crate::frameworks::core_foundation::{CFRelease, CFRetain, CFTypeRef};
 use crate::frameworks::core_graphics::cg_bitmap_context::{
     CGBitmapContextGetHeight, CGBitmapContextGetWidth,
 };
-use crate::frameworks::core_graphics::cg_geometry::CGPointZero;
 use crate::objc::{objc_classes, ClassExports, HostObject};
 use crate::Environment;
 
@@ -120,15 +119,15 @@ pub fn CGContextClearRect(env: &mut Environment, context: CGContextRef, rect: CG
 }
 
 fn CGContextClipToRect(env: &mut Environment, context: CGContextRef, rect: CGRect) {
-    if rect.origin == CGPointZero
-        && rect.size.height == CGBitmapContextGetHeight(env, context) as f32
-        && rect.size.width == CGBitmapContextGetWidth(env, context) as f32
+    let transform = env.objc.borrow::<CGContextHostObject>(context).transform;
+    let device_rect = transform.apply_to_rect(rect);
+    let width = CGBitmapContextGetWidth(env, context) as f32;
+    let height = CGBitmapContextGetHeight(env, context) as f32;
+    if device_rect.origin.x <= 0.5
+        && device_rect.origin.y <= 0.5
+        && device_rect.origin.x + device_rect.size.width >= width - 0.5
+        && device_rect.origin.y + device_rect.size.height >= height - 0.5
     {
-        assert!(env
-            .objc
-            .borrow_mut::<CGContextHostObject>(context)
-            .transform
-            .is_identity());
         // All good, clipping is not needed!
         return;
     }
@@ -148,6 +147,12 @@ pub fn CGContextGetCTM(env: &mut Environment, context: CGContextRef) -> CGAffine
     let res = env.objc.borrow::<CGContextHostObject>(context).transform;
     log_dbg!("CGContextGetCTM() => {:?}", res);
     res
+}
+/// Replace the current transform (host use only, e.g. to undo changes).
+pub fn set_ctm(env: &mut Environment, context: CGContextRef, transform: CGAffineTransform) {
+    env.objc
+        .borrow_mut::<CGContextHostObject>(context)
+        .transform = transform;
 }
 pub fn CGContextRotateCTM(env: &mut Environment, context: CGContextRef, angle: CGFloat) {
     log_dbg!("CGContextRotateCTM({:?})", angle);

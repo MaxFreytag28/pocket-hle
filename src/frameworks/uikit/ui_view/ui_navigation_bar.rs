@@ -14,6 +14,7 @@ use crate::frameworks::core_graphics::{CGFloat, CGPoint, CGRect, CGSize};
 use crate::frameworks::foundation::ns_string::{from_rust_string, get_static_str, to_rust_string};
 use crate::frameworks::foundation::{NSInteger, NSUInteger};
 use crate::frameworks::uikit::ui_font::UITextAlignmentCenter;
+use crate::frameworks::uikit::ui_responder::{find_action_target, is_first_responder_target};
 use crate::frameworks::uikit::ui_view::ui_control::ui_button::UIButtonTypeCustom;
 use crate::frameworks::uikit::ui_view::ui_control::{
     UIControlEventTouchUpInside, UIControlStateNormal,
@@ -103,6 +104,10 @@ struct UINavigationBarHostObject {
     right_button: id,
     /// Custom views of the bar button items currently shown, if any.
     shown_custom_views: Vec<id>,
+    /// Custom views and title views of every item on the stack (retained).
+    /// iOS keeps these alive while their item is on the stack, and some apps
+    /// release their own reference too early.
+    held_views: Vec<id>,
 }
 impl_HostObject_with_superclass!(UINavigationBarHostObject);
 
@@ -130,21 +135,22 @@ fn system_item_title(item: UIBarButtonSystemItem) -> &'static str {
         2 => "Edit",
         3 => "Save",
         4 => "+",
-        7 => "Reply",
-        8 => "Action",
-        9 => "Organize",
-        10 => "Bookmarks",
-        11 => "Search",
-        12 => "Refresh",
-        13 => "Stop",
-        14 => "Camera",
-        15 => "Trash",
-        16 => "Play",
-        17 => "Pause",
-        18 => "Rewind",
-        19 => "Forward",
-        20 => "Undo",
-        21 => "Redo",
+        7 => "Compose",
+        8 => "Reply",
+        9 => "Action",
+        10 => "Organize",
+        11 => "Bookmarks",
+        12 => "Search",
+        13 => "Refresh",
+        14 => "Stop",
+        15 => "Camera",
+        16 => "Trash",
+        17 => "Play",
+        18 => "Pause",
+        19 => "Rewind",
+        20 => "Forward",
+        21 => "Undo",
+        22 => "Redo",
         _ => "",
     }
 }
@@ -311,10 +317,19 @@ forControlEvents:(NSUInteger)_events {
 }
 
 // Called by the bar when the item's button is tapped.
-- (())_touchHLE_sendAction {
+// `bar` starts the responder chain for an item without a target.
+- (())_touchHLE_sendActionFrom:(id)bar {
     let &UIBarButtonItemHostObject { target, action, enabled, .. } = env.objc.borrow(this);
     let Some(action) = action else { return };
-    if !enabled || target == nil {
+    if !enabled {
+        return;
+    }
+    let target = if is_first_responder_target(env, target) {
+        find_action_target(env, bar, action)
+    } else {
+        target
+    };
+    if target == nil {
         return;
     }
     if action.as_str(&env.mem).contains(':') {
@@ -465,8 +480,9 @@ forControlEvents:(NSUInteger)_events {
     let host = env.objc.borrow_mut::<UINavigationBarHostObject>(this);
     let items = std::mem::take(&mut host.items);
     let shown = std::mem::take(&mut host.shown_custom_views);
+    let held = std::mem::take(&mut host.held_views);
     let objects = [host.tint_color, host.title_label, host.left_button, host.right_button];
-    for view in shown {
+    for view in shown.into_iter().chain(held) {
         release(env, view);
     }
     for item in items {
@@ -569,7 +585,7 @@ forControlEvents:(NSUInteger)_events {
     }
     let left = env.objc.borrow::<UINavigationItemHostObject>(top).left;
     if left != nil {
-        () = msg![env; left _touchHLE_sendAction];
+        () = msg![env; left _touchHLE_sendActionFrom:this];
         return;
     }
     // The back button.
@@ -606,7 +622,7 @@ forControlEvents:(NSUInteger)_events {
     }
     let right = env.objc.borrow::<UINavigationItemHostObject>(top).right;
     if right != nil {
-        () = msg![env; right _touchHLE_sendAction];
+        () = msg![env; right _touchHLE_sendActionFrom:this];
     }
 }
 
@@ -702,7 +718,7 @@ forControlEvents:(NSUInteger)_events {
         .find(|&&(button, _)| button == sender)
         .map(|&(_, item)| item);
     if let Some(item) = item {
-        () = msg![env; item _touchHLE_sendAction];
+        () = msg![env; item _touchHLE_sendActionFrom:this];
     }
 }
 
@@ -778,6 +794,8 @@ fn lay_out(env: &mut Environment, bar: id) {
             .borrow_mut::<UINavigationBarHostObject>(bar)
             .shown_custom_views,
     );
+
+    hold_item_views(env, bar);
 
     let bounds: CGRect = msg![env; bar bounds];
     let width = bounds.size.width;
@@ -892,6 +910,46 @@ fn lay_out(env: &mut Environment, bar: id) {
                 () = msg![env; view removeFromSuperview];
             }
         }
+        release(env, view);
+    }
+}
+
+/// Update which views the bar holds for the items on its stack.
+fn hold_item_views(env: &mut Environment, bar: id) {
+    let items = env
+        .objc
+        .borrow::<UINavigationBarHostObject>(bar)
+        .items
+        .clone();
+    let mut held = Vec::new();
+    for item in items {
+        let host = env.objc.borrow::<UINavigationItemHostObject>(item);
+        let (title_view, buttons) = (host.title_view, [host.left, host.right, host.back]);
+        let mut views = vec![title_view];
+        for button in buttons {
+            if button != nil {
+                views.push(
+                    env.objc
+                        .borrow::<UIBarButtonItemHostObject>(button)
+                        .custom_view,
+                );
+            }
+        }
+        for view in views {
+            if view != nil && !held.contains(&view) {
+                retain(env, view);
+                held.push(view);
+            }
+        }
+    }
+    let old = std::mem::replace(
+        &mut env
+            .objc
+            .borrow_mut::<UINavigationBarHostObject>(bar)
+            .held_views,
+        held,
+    );
+    for view in old {
         release(env, view);
     }
 }

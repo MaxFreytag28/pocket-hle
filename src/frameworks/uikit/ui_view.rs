@@ -69,6 +69,8 @@ pub(super) struct UIViewHostObject {
     clears_context_before_drawing: bool,
     user_interaction_enabled: bool,
     multiple_touch_enabled: bool,
+    /// Whether `layoutSubviews` should be called before the next frame.
+    needs_layout: bool,
 }
 impl HostObject for UIViewHostObject {}
 impl Default for UIViewHostObject {
@@ -84,6 +86,7 @@ impl Default for UIViewHostObject {
             clears_context_before_drawing: true,
             user_interaction_enabled: true,
             multiple_touch_enabled: false,
+            needs_layout: true,
         }
     }
 }
@@ -270,6 +273,12 @@ pub const CLASSES: ClassExports = objc_classes! {
     () = msg![env; this setCenter:center];
     () = msg![env; this setHidden:hidden];
     () = msg![env; this setOpaque:opaque];
+    let key_ns_string = get_static_str(env, "UIUserInteractionDisabled");
+    let interaction_disabled: bool = msg![env; coder decodeBoolForKey:key_ns_string];
+    () = msg![env; this setUserInteractionEnabled:(!interaction_disabled)];
+    let key_ns_string = get_static_str(env, "UIClipsToBounds");
+    let clips: bool = msg![env; coder decodeBoolForKey:key_ns_string];
+    () = msg![env; this setClipsToBounds:clips];
     () = msg![env; this setBackgroundColor:bg_color];
     () = msg![env; this setTag:tag];
     () = msg![env; this setMultipleTouchEnabled:multi_touch_enabled];
@@ -380,6 +389,7 @@ pub const CLASSES: ClassExports = objc_classes! {
         let this_layer = this_obj.layer;
         () = msg![env; this_layer addSublayer:subview_layer];
     }
+    env.objc.borrow_mut::<UIViewHostObject>(view).needs_layout = true;
 }
 
 - (())insertSubview:(id)view atIndex:(NSInteger)index {
@@ -401,6 +411,7 @@ pub const CLASSES: ClassExports = objc_classes! {
 
     assert!(index >= 0);
     () = msg![env; this_layer insertSublayer:subview_layer atIndex:(index as u32)];
+    env.objc.borrow_mut::<UIViewHostObject>(view).needs_layout = true;
 }
 
 - (())insertSubview:(id)view belowSubview:(id)sibling {
@@ -506,6 +517,7 @@ pub const CLASSES: ClassExports = objc_classes! {
         clears_context_before_drawing: _,
         user_interaction_enabled: _,
         multiple_touch_enabled: _,
+        needs_layout: _,
     } = std::mem::take(env.objc.borrow_mut(this));
 
     release(env, layer);
@@ -536,8 +548,13 @@ pub const CLASSES: ClassExports = objc_classes! {
     msg![env; layer setHidden:hidden]
 }
 
+- (bool)clipsToBounds {
+    let layer = env.objc.borrow::<UIViewHostObject>(this).layer;
+    msg![env; layer masksToBounds]
+}
 - (())setClipsToBounds:(bool)clips {
-    log!("TODO: [{:?} setClipsToBounds:{}]", this, clips);
+    let layer = env.objc.borrow::<UIViewHostObject>(this).layer;
+    msg![env; layer setMasksToBounds:clips]
 }
 
 - (bool)isOpaque {
@@ -604,7 +621,11 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 - (())setBounds:(CGRect)bounds {
     let layer = env.objc.borrow::<UIViewHostObject>(this).layer;
-    msg![env; layer setBounds:bounds]
+    let old: CGRect = msg![env; layer bounds];
+    () = msg![env; layer setBounds:bounds];
+    if old.size != bounds.size {
+        env.objc.borrow_mut::<UIViewHostObject>(this).needs_layout = true;
+    }
 }
 - (CGPoint)center {
     // FIXME: what happens if [layer anchorPoint] isn't (0.5, 0.5)?
@@ -621,7 +642,19 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 - (())setFrame:(CGRect)frame {
     let layer = env.objc.borrow::<UIViewHostObject>(this).layer;
-    msg![env; layer setFrame:frame]
+    let old: CGRect = msg![env; layer bounds];
+    () = msg![env; layer setFrame:frame];
+    let new: CGRect = msg![env; layer bounds];
+    if old.size != new.size {
+        env.objc.borrow_mut::<UIViewHostObject>(this).needs_layout = true;
+    }
+}
+
+- (())setNeedsLayout {
+    env.objc.borrow_mut::<UIViewHostObject>(this).needs_layout = true;
+}
+- (())layoutIfNeeded {
+    layout_if_needed(env, this);
 }
 - (CGAffineTransform)transform {
     let layer = env.objc.borrow::<UIViewHostObject>(this).layer;
@@ -790,3 +823,27 @@ pub const CLASSES: ClassExports = objc_classes! {
 @end
 
 };
+
+/// Call `layoutSubviews` on the views in a tree that need it, parents first,
+/// as iOS does before drawing.
+pub fn layout_if_needed(env: &mut Environment, view: id) {
+    lay_out_tree(env, view);
+}
+
+/// Returns whether any view was laid out (which may have freed views).
+fn lay_out_tree(env: &mut Environment, view: id) -> bool {
+    let mut laid_out = false;
+    if std::mem::take(&mut env.objc.borrow_mut::<UIViewHostObject>(view).needs_layout) {
+        () = msg![env; view layoutSubviews];
+        laid_out = true;
+    }
+    let subviews = env.objc.borrow::<UIViewHostObject>(view).subviews.clone();
+    for subview in subviews {
+        // Laying out a sibling can free views (e.g. a table's old rows).
+        if laid_out && !env.framework_state.uikit.ui_view.views.contains(&subview) {
+            continue;
+        }
+        laid_out |= lay_out_tree(env, subview);
+    }
+    laid_out
+}

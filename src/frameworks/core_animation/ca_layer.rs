@@ -16,7 +16,8 @@ use crate::frameworks::core_graphics::cg_bitmap_context::{
 use crate::frameworks::core_graphics::cg_color::{CGColorHostObject, CGColorRef};
 use crate::frameworks::core_graphics::cg_color_space::CGColorSpaceCreateDeviceRGB;
 use crate::frameworks::core_graphics::cg_context::{
-    CGContextClearRect, CGContextRef, CGContextRelease, CGContextTranslateCTM,
+    set_ctm, CGContextClearRect, CGContextGetCTM, CGContextRef, CGContextRelease,
+    CGContextScaleCTM, CGContextTranslateCTM,
 };
 use crate::frameworks::core_graphics::cg_image::{
     kCGImageAlphaPremultipliedLast, kCGImageByteOrder32Big,
@@ -48,6 +49,8 @@ pub(super) struct CALayerHostObject {
     pub(super) opacity: f32,
     pub(super) background_color: Option<CGColorHostObject>,
     pub(super) corner_radius: CGFloat,
+    /// Whether sublayers are clipped to the bounds.
+    pub(super) masks_to_bounds: bool,
     pub(super) needs_display: bool,
     /// `CGImageRef*`
     pub(super) contents: id,
@@ -125,6 +128,7 @@ pub const CLASSES: ClassExports = objc_classes! {
         opacity: 1.0,
         background_color: None, // transparency
         corner_radius: 0.0,
+        masks_to_bounds: false,
         needs_display: false,
         contents: nil,
         drawable_properties: nil,
@@ -336,6 +340,13 @@ pub const CLASSES: ClassExports = objc_classes! {
     env.objc.borrow_mut::<CALayerHostObject>(this).background_color = new_color;
 }
 
+- (bool)masksToBounds {
+    env.objc.borrow::<CALayerHostObject>(this).masks_to_bounds
+}
+- (())setMasksToBounds:(bool)masks {
+    env.objc.borrow_mut::<CALayerHostObject>(this).masks_to_bounds = masks;
+}
+
 - (CGFloat)cornerRadius {
     env.objc.borrow::<CALayerHostObject>(this).corner_radius
 }
@@ -384,9 +395,16 @@ pub const CLASSES: ClassExports = objc_classes! {
 
     *gles_texture_is_up_to_date = false;
 
+    // Draw at the output scale so text and shapes stay sharp when the screen
+    // is scaled up, unless the bitmap would get very big (e.g. a long page).
+    let mut scale = env.options.scale_hack.get();
+    while scale > 1 && (size.width * size.height) as f64 * (scale * scale * 4) as f64 > 16e6 {
+        scale -= 1;
+    }
+
     // TODO: more correctly handle non-integer sizes?
-    let int_width = size.width.round() as GuestUSize;
-    let int_height = size.height.round() as GuestUSize;
+    let int_width = size.width.round() as GuestUSize * scale;
+    let int_height = size.height.round() as GuestUSize * scale;
 
     let need_new_context = cg_context.is_none_or(|existing|
             CGBitmapContextGetWidth(env, existing) != int_width ||
@@ -417,11 +435,13 @@ pub const CLASSES: ClassExports = objc_classes! {
         cg_context.unwrap()
     };
 
+    let old_transform = CGContextGetCTM(env, cg_context);
+    CGContextScaleCTM(env, cg_context, scale as CGFloat, scale as CGFloat);
     CGContextTranslateCTM(env, cg_context, -origin.x, -origin.y);
     // TODO: move clearing to UIKit (clearsContextBeforeDrawing)?
     CGContextClearRect(env, cg_context, CGRect { origin, size });
     () = msg![env; delegate drawLayer:this inContext:cg_context];
-    CGContextTranslateCTM(env, cg_context, origin.x, origin.y);
+    set_ctm(env, cg_context, old_transform);
 }
 
 // CGImageRef*

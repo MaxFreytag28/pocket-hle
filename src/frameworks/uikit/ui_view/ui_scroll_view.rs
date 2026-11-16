@@ -10,7 +10,8 @@ pub mod ui_text_view;
 use crate::frameworks::core_graphics::{CGPoint, CGRect, CGSize};
 use crate::frameworks::foundation::NSInteger;
 use crate::objc::{
-    id, impl_HostObject_with_superclass, msg, nil, objc_classes, ClassExports, NSZonePtr, SEL,
+    id, impl_HostObject_with_superclass, msg, msg_super, nil, objc_classes, ClassExports,
+    NSZonePtr, SEL,
 };
 
 type UIScrollViewIndicatorStyle = NSInteger;
@@ -48,6 +49,18 @@ pub const CLASSES: ClassExports = objc_classes! {
 + (id)allocWithZone:(NSZonePtr)_zone {
     let host_object = Box::<UIScrollViewHostObject>::default();
     env.objc.alloc_object(this, host_object, &mut env.mem)
+}
+
+// Scroll views clip their content by default.
+- (id)initWithFrame:(CGRect)frame {
+    let this: id = msg_super![env; this initWithFrame:frame];
+    () = msg![env; this setClipsToBounds:true];
+    this
+}
+- (id)initWithCoder:(id)coder {
+    let this: id = msg_super![env; this initWithCoder:coder];
+    () = msg![env; this setClipsToBounds:true];
+    this
 }
 
 - (id)delegate {

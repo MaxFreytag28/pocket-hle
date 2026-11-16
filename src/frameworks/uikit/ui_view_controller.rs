@@ -176,6 +176,16 @@ pub const CLASSES: ClassExports = objc_classes! {
     retain(env, new_view);
     release(env, old_view);
 }
+// iOS: a view controller's next responder is its view's superview.
+- (id)nextResponder {
+    let view = env.objc.borrow::<UIViewControllerHostObject>(this).view;
+    if view == nil {
+        nil
+    } else {
+        msg![env; view superview]
+    }
+}
+
 - (id)view {
     let view = env.objc.borrow_mut::<UIViewControllerHostObject>(this).view;
     if view == nil {

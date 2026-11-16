@@ -13,8 +13,14 @@
 use super::ca_eagl_layer::find_fullscreen_eagl_layer;
 use super::ca_layer::CALayerHostObject;
 use crate::frameworks::core_animation::animation;
+use crate::frameworks::core_graphics::cg_affine_transform::{
+    CGAffineTransform, CGAffineTransformIdentity,
+};
 use crate::frameworks::core_graphics::cg_color::CGColorHostObject;
-use crate::frameworks::core_graphics::{cg_bitmap_context, cg_image, CGFloat, CGRect};
+use crate::frameworks::core_graphics::cg_context::CGContextRelease;
+use crate::frameworks::core_graphics::{
+    cg_bitmap_context, cg_image, CGFloat, CGPoint, CGRect, CGSize,
+};
 use crate::gles::gles11_raw as gles11; // constants only
 use crate::gles::gles11_raw::types::*;
 use crate::gles::present::{present_frame, FpsCounter};
@@ -123,6 +129,8 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
     let window_layers: Vec<id> = windows
         .into_iter()
         .map(|window| {
+            // Views lay out before they are drawn.
+            crate::frameworks::uikit::ui_view::layout_if_needed(env, window);
             let layer: id = msg![env; window layer];
             // Ensure layer bitmaps are up to date.
             display_layers(env, layer);
@@ -335,6 +343,11 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
                 root_layer,
                 cumulative_transform,
                 opacity,
+                ClipState {
+                    pixels_per_point: fb_width as f32 / screen_bounds.size.width,
+                    fb_height: fb_height as f32,
+                    rect: None,
+                },
             );
         }
     }
@@ -345,6 +358,7 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
 
     // Clean up some GL state
     unsafe {
+        gles.Disable(gles11::SCISSOR_TEST);
         gles.Viewport(0, 0, fb_width as _, fb_height as _);
         gles.Color4f(1.0, 1.0, 1.0, 1.0);
         gles.Disable(gles11::BLEND);
@@ -379,27 +393,109 @@ pub fn recomposite_if_necessary(env: &mut Environment, force: bool) -> Option<In
 /// Call `displayIfNeeded` on all relevant layers in the tree, so their bitmaps
 /// are up to date before compositing.
 fn display_layers(env: &mut Environment, root_layer: id) {
-    // Tell layers to redraw themselves if needed.
+    // Tell layers to redraw themselves if needed. Only layers on or near the
+    // screen are drawn, and the bitmaps of layers far away (e.g. the rest of
+    // a long scrolling page) are let go of, to be drawn again when needed.
+    // This keeps memory use down, especially with --scale-hack.
 
-    fn traverse(objc: &ObjC, layer: id, layers_needing_display: &mut Vec<id>) {
+    struct Area {
+        /// Layers intersecting this are drawn.
+        near: CGRect,
+        /// Layers not intersecting this lose their bitmap.
+        far: CGRect,
+    }
+
+    fn intersects(a: &CGRect, b: &CGRect) -> bool {
+        a.origin.x < b.origin.x + b.size.width
+            && b.origin.x < a.origin.x + a.size.width
+            && a.origin.y < b.origin.y + b.size.height
+            && b.origin.y < a.origin.y + a.size.height
+    }
+
+    fn traverse(
+        objc: &ObjC,
+        layer: id,
+        to_screen: CGAffineTransform,
+        area: &Area,
+        layers_needing_display: &mut Vec<id>,
+        layers_to_drop: &mut Vec<id>,
+    ) {
         let host_obj = objc.borrow::<CALayerHostObject>(layer);
         if host_obj.hidden {
             return;
         }
-        if host_obj.needs_display {
-            layers_needing_display.push(layer);
+        let to_screen = host_obj.superlayer_to_layer_transform().concat(to_screen);
+        let screen_rect = to_screen.apply_to_rect(host_obj.bounds);
+        if intersects(&screen_rect, &area.near) {
+            if host_obj.needs_display {
+                layers_needing_display.push(layer);
+            }
+        } else if host_obj.cg_context.is_some() && !intersects(&screen_rect, &area.far) {
+            layers_to_drop.push(layer);
         }
         for &layer in &host_obj.sublayers {
-            traverse(objc, layer, layers_needing_display);
+            traverse(
+                objc,
+                layer,
+                to_screen,
+                area,
+                layers_needing_display,
+                layers_to_drop,
+            );
         }
     }
 
+    let screen_bounds: CGRect = {
+        let screen: id = msg_class![env; UIScreen mainScreen];
+        msg![env; screen bounds]
+    };
+    let grow = |rect: CGRect, by: CGFloat| CGRect {
+        origin: CGPoint {
+            x: rect.origin.x - rect.size.width * by,
+            y: rect.origin.y - rect.size.height * by,
+        },
+        size: CGSize {
+            width: rect.size.width * (1.0 + 2.0 * by),
+            height: rect.size.height * (1.0 + 2.0 * by),
+        },
+    };
+    let area = Area {
+        near: grow(screen_bounds, 0.5),
+        far: grow(screen_bounds, 2.0),
+    };
+
     let mut layers_needing_display = Vec::new();
-    traverse(&env.objc, root_layer, &mut layers_needing_display);
+    let mut layers_to_drop = Vec::new();
+    traverse(
+        &env.objc,
+        root_layer,
+        CGAffineTransformIdentity,
+        &area,
+        &mut layers_needing_display,
+        &mut layers_to_drop,
+    );
+
+    for layer in layers_to_drop {
+        let host_obj = env.objc.borrow_mut::<CALayerHostObject>(layer);
+        let context = host_obj.cg_context.take().unwrap();
+        host_obj.needs_display = true;
+        host_obj.gles_texture_is_up_to_date = false;
+        CGContextRelease(env, context);
+    }
 
     for layer in layers_needing_display {
         () = msg![env; layer displayIfNeeded];
     }
+}
+
+/// Clipping for `masksToBounds`, done with a scissor rectangle (so it is only
+/// exact for layers that aren't rotated by odd angles).
+#[derive(Clone, Copy)]
+struct ClipState {
+    pixels_per_point: f32,
+    fb_height: f32,
+    /// Screen-space (x0, y0, x1, y1) in points, if anything is clipped.
+    rect: Option<(f32, f32, f32, f32)>,
 }
 
 /// Traverses the layer tree and draws each layer.
@@ -409,6 +505,7 @@ unsafe fn composite_layer_recursive(
     layer: id,
     cumulative_transform: Matrix<4>,
     opacity: CGFloat,
+    clip: ClipState,
 ) {
     // TODO: this can't handle zPosition among other things, but it is not
     //       supported yet :)
@@ -424,6 +521,19 @@ unsafe fn composite_layer_recursive(
 
     let window = env.window.as_mut().unwrap();
     let gles = window.get_internal_gl_ctx();
+
+    if let Some((x0, y0, x1, y1)) = clip.rect {
+        let s = clip.pixels_per_point;
+        gles.Enable(gles11::SCISSOR_TEST);
+        gles.Scissor(
+            (x0 * s).round() as _,
+            (clip.fb_height - y1 * s).round() as _,
+            ((x1 - x0).max(0.0) * s).round() as _,
+            ((y1 - y0).max(0.0) * s).round() as _,
+        );
+    } else {
+        gles.Disable(gles11::SCISSOR_TEST);
+    }
 
     let opacity = opacity * host_obj.opacity;
     let cumulative_transform = {
@@ -530,6 +640,13 @@ unsafe fn composite_layer_recursive(
         || host_obj.cg_context.is_some();
     let need_update = need_texture && !host_obj.gles_texture_is_up_to_date;
 
+    if !need_texture && host_obj.gles_texture.is_some() {
+        // The layer's bitmap was let go of (see display_layers): so is this.
+        let original_host_obj = env.objc.borrow_mut::<CALayerHostObject>(layer);
+        let texture = original_host_obj.gles_texture.take().unwrap();
+        original_host_obj.gles_texture_is_up_to_date = false;
+        gles.DeleteTextures(1, &texture);
+    }
     if need_texture {
         if let Some(texture) = host_obj.gles_texture {
             gles.BindTexture(gles11::TEXTURE_2D, texture);
@@ -630,16 +747,45 @@ unsafe fn composite_layer_recursive(
         );
     }
 
+    let mut child_clip = clip;
+    if host_obj.masks_to_bounds {
+        let CGRect { origin, size } = host_obj.bounds;
+        let corners = [
+            (origin.x, origin.y),
+            (origin.x + size.width, origin.y),
+            (origin.x, origin.y + size.height),
+            (origin.x + size.width, origin.y + size.height),
+        ]
+        .map(|(x, y)| cumulative_transform.transform([x, y, 0.0, 1.0]));
+        let min = |i: usize| corners.iter().map(|c| c[i]).fold(f32::INFINITY, f32::min);
+        let max = |i: usize| {
+            corners
+                .iter()
+                .map(|c| c[i])
+                .fold(f32::NEG_INFINITY, f32::max)
+        };
+        let mut rect = (min(0), min(1), max(0), max(1));
+        if let Some((x0, y0, x1, y1)) = clip.rect {
+            rect = (
+                rect.0.max(x0),
+                rect.1.max(y0),
+                rect.2.min(x1),
+                rect.3.min(y1),
+            );
+        }
+        child_clip.rect = Some(rect);
+    }
+
     // avoid holding mutable borrow while recursing
     let original_host_obj = env.objc.borrow_mut::<CALayerHostObject>(layer);
     for &child_layer in &original_host_obj.sublayers.clone() {
-        // TODO: clipping/masksToBounds support
         composite_layer_recursive(
             env,
             animation_state,
             child_layer,
             cumulative_transform,
             opacity,
+            child_clip,
         )
     }
 }

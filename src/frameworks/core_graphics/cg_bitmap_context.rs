@@ -390,6 +390,12 @@ impl CGBitmapContextDrawer<'_> {
     pub fn width(&self) -> GuestUSize {
         self.bitmap_info.width
     }
+    /// How many pixels a unit of user space currently covers (for drawing
+    /// text sharply in contexts with a scaled transform).
+    pub fn pixel_scale(&self) -> CGFloat {
+        let t = self.transform;
+        (t.a * t.d - t.b * t.c).abs().sqrt().max(1.0)
+    }
     pub fn height(&self) -> GuestUSize {
         self.bitmap_info.height
     }

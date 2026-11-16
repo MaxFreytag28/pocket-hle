@@ -222,24 +222,31 @@ pub fn size_with_font(
 }
 
 #[inline(always)]
+/// `scale` is how many times larger than its user-space size the glyph was
+/// rasterized, so that text stays sharp in scaled-up contexts.
 fn draw_font_glyph(
     drawer: &mut CGBitmapContextDrawer,
     raster_glyph: crate::font::RasterGlyph,
+    scale: f32,
     fill_color: (f32, f32, f32, f32),
     clip_x: Option<Range<f32>>,
     clip_y: Option<Range<f32>>,
 ) {
+    let (raster_width, raster_height) = raster_glyph.dimensions();
     let mut glyph_rect = {
         let (x, y) = raster_glyph.origin();
-        let (width, height) = raster_glyph.dimensions();
         CGRect {
-            origin: CGPoint { x, y },
+            origin: CGPoint {
+                x: x / scale,
+                y: y / scale,
+            },
             size: CGSize {
-                width: width as f32,
-                height: height as f32,
+                width: raster_width as f32 / scale,
+                height: raster_height as f32 / scale,
             },
         }
     };
+    let full_size = glyph_rect.size;
     // The code in font.rs won't and can't clip glyphs hanging over the right
     // and bottom sides of the rect, so it has to be done here. Bear in mind
     // that this must not incorrectly affect the texture co-ordinates, otherwise
@@ -265,9 +272,12 @@ fn draw_font_glyph(
 
     for ((x, y), (tex_x, tex_y)) in drawer.iter_transformed_pixels(glyph_rect) {
         // TODO: bilinear sampling
+        // Texture co-ordinates are relative to the (possibly clipped) rect.
         let coverage = raster_glyph.pixel_at((
-            (tex_x * glyph_rect.size.width - 0.5).round() as i32,
-            (tex_y * glyph_rect.size.height - 0.5).round() as i32,
+            (tex_x * glyph_rect.size.width / full_size.width * raster_width as f32 - 0.5).round()
+                as i32,
+            (tex_y * glyph_rect.size.height / full_size.height * raster_height as f32 - 0.5).round()
+                as i32,
         ));
         let (r, g, b, a) = fill_color;
         let (r, g, b, a) = (r * coverage, g * coverage, b * coverage, a * coverage);
@@ -301,17 +311,19 @@ pub fn draw_at_point(
 
     let mut drawer = CGBitmapContextDrawer::new(&env.objc, &mut env.mem, context);
     let fill_color = drawer.rgb_fill_color();
+    let scale = drawer.pixel_scale();
 
     font.draw(
-        host_object.size,
+        host_object.size * scale,
         text,
-        (point.x, point.y),
-        width_and_line_break_mode,
+        (point.x * scale, point.y * scale),
+        width_and_line_break_mode.map(|(width, mode)| (width * scale, mode)),
         TextAlignment::Left,
         |raster_glyph| {
             draw_font_glyph(
                 &mut drawer,
                 raster_glyph,
+                scale,
                 fill_color,
                 clip_x.clone(),
                 /* clip_y: */ None,
@@ -345,6 +357,7 @@ pub fn draw_in_rect(
 
     let mut drawer = CGBitmapContextDrawer::new(&env.objc, &mut env.mem, context);
     let fill_color = drawer.rgb_fill_color();
+    let scale = drawer.pixel_scale();
 
     let (origin_x_offset, alignment) = match alignment {
         UITextAlignmentLeft => (0.0, TextAlignment::Left),
@@ -354,15 +367,22 @@ pub fn draw_in_rect(
     };
 
     font.draw(
-        host_object.size,
+        host_object.size * scale,
         text,
-        (rect.origin.x + origin_x_offset, rect.origin.y),
-        Some((rect.size.width, convert_line_break_mode(line_break_mode))),
+        (
+            (rect.origin.x + origin_x_offset) * scale,
+            rect.origin.y * scale,
+        ),
+        Some((
+            rect.size.width * scale,
+            convert_line_break_mode(line_break_mode),
+        )),
         alignment,
         |raster_glyph| {
             draw_font_glyph(
                 &mut drawer,
                 raster_glyph,
+                scale,
                 fill_color,
                 /* clip_x: */ Some(rect.origin.x..(rect.origin.x + rect.size.width)),
                 /* clip_y: */ Some(rect.origin.y..(rect.origin.y + rect.size.height)),

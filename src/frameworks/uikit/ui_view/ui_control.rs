@@ -84,8 +84,6 @@ pub fn send_actions(env: &mut Environment, this: id, event: id, control_event: U
         .collect();
 
     for (target, action) in action_targets {
-        assert!(target != nil); // TODO
-
         () = msg![env; this sendAction:action to:target forEvent:event];
     }
 }
@@ -289,7 +287,15 @@ forControlEvents:(UIControlEvents)events {
 - (())sendAction:(SEL)action
               to:(id)target
         forEvent:(id)event { // UIEvent*
-    assert!(target != nil); // TODO
+    let target = if crate::frameworks::uikit::ui_responder::is_first_responder_target(env, target) {
+        crate::frameworks::uikit::ui_responder::find_action_target(env, this, action)
+    } else {
+        target
+    };
+    if target == nil {
+        log!("Warning: nothing in the responder chain handles {:?}", action.as_str(&env.mem));
+        return;
+    }
 
     let sel_str = action.as_str(&env.mem);
     let colon_count = sel_str.bytes().filter(|&b| b == b':').count();

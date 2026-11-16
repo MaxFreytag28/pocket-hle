@@ -37,6 +37,8 @@ pub const CLASSES: ClassExports = objc_classes! {
     // Not sure if UIImageView does this unconditionally, or only for images
     // with alpha channels.
     () = msg![env; this setOpaque:false];
+    // Image views let touches through to the views behind them.
+    () = msg![env; this setUserInteractionEnabled:false];
     this
 }
 
@@ -62,6 +64,8 @@ pub const CLASSES: ClassExports = objc_classes! {
     // Not sure if UIImageView does this unconditionally, or only for images
     // with alpha channels.
     () = msg![env; this setOpaque:false];
+    // Image views let touches through to the views behind them.
+    () = msg![env; this setUserInteractionEnabled:false];
     this
 }
 

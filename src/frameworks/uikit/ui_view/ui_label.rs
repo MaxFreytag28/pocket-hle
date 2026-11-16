@@ -97,6 +97,8 @@ pub const CLASSES: ClassExports = objc_classes! {
     () = msg![env; this setBackgroundColor:nil];
     // Built-in views don't have user-controlled opaqueness.
     () = msg_super![env; this setOpaque:false];
+    // Labels let touches through to the views behind them.
+    () = msg![env; this setUserInteractionEnabled:false];
     this
 }
 

@@ -5,7 +5,39 @@
  */
 //! `UIResponder`.
 
-use crate::objc::{id, msg, nil, objc_classes, ClassExports};
+use crate::objc::{id, msg, nil, objc_classes, ClassExports, SEL};
+use crate::Environment;
+
+/// Find the object an action with no target (or one aimed at a nib's
+/// "first responder" placeholder) goes to: the first object in the responder
+/// chain starting at `start` that implements it, as iOS does.
+pub fn find_action_target(env: &mut Environment, start: id, action: SEL) -> id {
+    let first_responder = env.framework_state.uikit.ui_responder.first_responder;
+    for begin in [first_responder, start] {
+        let mut responder = begin;
+        // Guard against loops in a broken chain.
+        for _ in 0..64 {
+            if responder == nil {
+                break;
+            }
+            let responds: bool = msg![env; responder respondsToSelector:action];
+            if responds {
+                return responder;
+            }
+            responder = msg![env; responder nextResponder];
+        }
+    }
+    nil
+}
+
+/// Whether `target` is unset or a nib's placeholder for the first responder.
+pub fn is_first_responder_target(env: &mut Environment, target: id) -> bool {
+    if target == nil {
+        return true;
+    }
+    let class: crate::objc::Class = msg![env; target class];
+    env.objc.get_class_name(class) == "UIProxyObject"
+}
 
 #[derive(Default)]
 pub struct State {
