@@ -332,6 +332,10 @@ pub(super) fn UIApplicationMain(
     // See https://medium.com/geekculture/uiview-lifecycle-part-5-faa2d44511c9
     let views = env.framework_state.uikit.ui_view.views.clone();
     for view in views {
+        // Laying out one view can free others (e.g. a table's old rows).
+        if !env.framework_state.uikit.ui_view.views.contains(&view) {
+            continue;
+        }
         () = msg![env; view layoutSubviews];
     }
 

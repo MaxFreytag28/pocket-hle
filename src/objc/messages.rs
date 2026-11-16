@@ -106,7 +106,12 @@ fn objc_msgSend_inner(env: &mut Environment, receiver: id, selector: SEL, super2
     ensure_class_initialized(env, receiver);
 
     let orig_class = super2.unwrap_or_else(|| ObjC::read_isa(receiver, &env.mem));
-    assert!(orig_class != nil);
+    assert!(
+        orig_class != nil,
+        "Message {:?} sent to object {:?}, which has no class (probably freed already)",
+        selector.as_str(&env.mem),
+        receiver
+    );
 
     // Traverse the chain of superclasses to find the method implementation.
 

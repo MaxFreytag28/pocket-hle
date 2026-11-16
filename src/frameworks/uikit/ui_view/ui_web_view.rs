@@ -40,8 +40,16 @@ enum Block {
         centered: bool,
         href: Option<String>,
     },
-    /// Images side by side, each possibly a link.
-    Images(Vec<(String, Option<String>)>),
+    /// Images side by side, each possibly a link, with where a lone image
+    /// goes.
+    Images(Vec<(String, Option<String>)>, Align),
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Align {
+    Left,
+    Center,
+    Right,
 }
 
 struct UIWebViewHostObject {
@@ -61,6 +69,8 @@ struct UIWebViewHostObject {
     text_color: id,
     background_color: id,
     scales_page_to_fit: bool,
+    /// The visible part the page was last laid out for.
+    laid_out_for: Option<CGRect>,
 }
 impl_HostObject_with_superclass!(UIWebViewHostObject);
 impl Default for UIWebViewHostObject {
@@ -76,6 +86,7 @@ impl Default for UIWebViewHostObject {
             text_color: nil,
             background_color: nil,
             scales_page_to_fit: false,
+            laid_out_for: None,
         }
     }
 }
@@ -119,6 +130,10 @@ pub const CLASSES: ClassExports = objc_classes! {
     let key = get_static_str(env, "UIScalesPageToFit");
     let scales: bool = msg![env; coder decodeBoolForKey:key];
     host(env, this).scales_page_to_fit = scales;
+    // The delegate can be set in the nib file (weak).
+    let key = get_static_str(env, "UIDelegate");
+    let delegate: id = msg![env; coder decodeObjectForKey:key];
+    host(env, this).delegate = delegate;
     this
 }
 
@@ -215,6 +230,16 @@ textEncodingName:(id)_encoding // NSString*
     let scroll_view = host(env, this).scroll_view;
     if scroll_view != nil {
         () = msg![env; scroll_view setBackgroundColor:color];
+    }
+}
+
+// The space the web view gets may change after the page was laid out (e.g.
+// its superview is resized): check when it is drawn.
+- (())drawRect:(CGRect)_rect {
+    let bounds: CGRect = msg![env; this bounds];
+    let visible = visible_rect(env, this, bounds);
+    if host(env, this).laid_out_for != Some(visible) {
+        lay_out(env, this);
     }
 }
 
@@ -341,9 +366,14 @@ fn lay_out(env: &mut Environment, this: id) {
     }
     clear_views(env, this);
     let bounds: CGRect = msg![env; this bounds];
-    () = msg![env; scroll_view setFrame:bounds];
-    let width = bounds.size.width;
-    let text_width = (width - 2.0 * MARGIN).max(10.0);
+    // Apps sometimes make the web view bigger than the space it gets, e.g.
+    // to hide the page edges. The page is shown in the part that can be seen.
+    let visible = visible_rect(env, this, bounds);
+    host(env, this).laid_out_for = Some(visible);
+    () = msg![env; scroll_view setFrame:visible];
+    let width = visible.size.width;
+    let (left, right) = (0.0, width);
+    let text_width = (right - left - 2.0 * MARGIN).max(10.0);
 
     let font_size = host(env, this).font_size;
     let text_color = host(env, this).text_color;
@@ -386,7 +416,10 @@ fn lay_out(env: &mut Environment, this: id) {
                 let measured: CGSize =
                     msg![env; ns_text sizeWithFont:font constrainedToSize:limit lineBreakMode:0i32];
                 let frame = CGRect {
-                    origin: CGPoint { x: MARGIN, y },
+                    origin: CGPoint {
+                        x: left + MARGIN,
+                        y,
+                    },
                     size: CGSize {
                         width: text_width,
                         height: measured.height.ceil() + 2.0,
@@ -422,7 +455,7 @@ fn lay_out(env: &mut Environment, this: id) {
                 }
                 y += frame.size.height + BLOCK_GAP;
             }
-            Block::Images(images) => {
+            Block::Images(images, align) => {
                 // Side by side, the first on the left and the last on the
                 // right (e.g. "previous" and "next" page images).
                 let mut row_height: CGFloat = 0.0;
@@ -439,11 +472,15 @@ fn lay_out(env: &mut Environment, this: id) {
                         height: (size.height * scale).round(),
                     };
                     let x = if count == 1 {
-                        ((width - size.width) / 2.0).round()
+                        match align {
+                            Align::Left => left + MARGIN,
+                            Align::Right => right - MARGIN - size.width,
+                            Align::Center => (left + (right - left - size.width) / 2.0).round(),
+                        }
                     } else if i == count - 1 {
-                        width - MARGIN - size.width
+                        right - MARGIN - size.width
                     } else {
-                        MARGIN + (i as CGFloat) * (text_width / count as CGFloat)
+                        left + MARGIN + (i as CGFloat) * (text_width / count as CGFloat)
                     };
                     let frame = CGRect {
                         origin: CGPoint { x, y },
@@ -455,12 +492,34 @@ fn lay_out(env: &mut Environment, this: id) {
                         retain(env, button);
                         () = msg![env; button setImage:image forState:UIControlStateNormal];
                         () = msg![env; button addTarget:this action:link_action forControlEvents:UIControlEventTouchUpInside];
+                        // A finger-sized target around a small image.
+                        let target = CGRect {
+                            origin: CGPoint {
+                                x: frame.origin.x - ((44.0 - size.width) / 2.0).max(0.0),
+                                y: frame.origin.y - ((44.0 - size.height) / 2.0).max(0.0),
+                            },
+                            size: CGSize {
+                                width: size.width.max(44.0),
+                                height: size.height.max(44.0),
+                            },
+                        };
+                        () = msg![env; button setFrame:target];
+                        let image_view: id = msg![env; button imageView];
+                        let image_frame = CGRect {
+                            origin: CGPoint {
+                                x: frame.origin.x - target.origin.x,
+                                y: frame.origin.y - target.origin.y,
+                            },
+                            size,
+                        };
+                        () = msg![env; image_view setFrame:image_frame];
                         button
                     } else {
                         let image_view: id = msg_class![env; UIImageView alloc];
-                        msg![env; image_view initWithImage:image]
+                        let image_view: id = msg![env; image_view initWithImage:image];
+                        () = msg![env; image_view setFrame:frame];
+                        image_view
                     };
-                    () = msg![env; view setFrame:frame];
                     () = msg![env; scroll_view addSubview:view];
                     host(env, this).views.push((view, href.clone()));
                     row_height = row_height.max(size.height);
@@ -475,9 +534,37 @@ fn lay_out(env: &mut Environment, this: id) {
 
     let content_size = CGSize {
         width,
-        height: (y + MARGIN).max(bounds.size.height),
+        height: (y + MARGIN).max(visible.size.height),
     };
     () = msg![env; scroll_view setContentSize:content_size];
+}
+
+/// The part of the web view (in its own coordinates) that is within its
+/// superview, i.e. can be seen.
+fn visible_rect(env: &mut Environment, this: id, bounds: CGRect) -> CGRect {
+    let superview: id = msg![env; this superview];
+    if superview == nil {
+        return bounds;
+    }
+    let frame: CGRect = msg![env; this frame];
+    let limit: CGRect = msg![env; superview bounds];
+    let x0 = frame.origin.x.max(limit.origin.x);
+    let y0 = frame.origin.y.max(limit.origin.y);
+    let x1 = (frame.origin.x + frame.size.width).min(limit.origin.x + limit.size.width);
+    let y1 = (frame.origin.y + frame.size.height).min(limit.origin.y + limit.size.height);
+    if x1 <= x0 || y1 <= y0 {
+        return bounds;
+    }
+    CGRect {
+        origin: CGPoint {
+            x: x0 - frame.origin.x,
+            y: y0 - frame.origin.y,
+        },
+        size: CGSize {
+            width: x1 - x0,
+            height: y1 - y0,
+        },
+    }
 }
 
 fn load_image(env: &mut Environment, base_path: Option<&str>, src: &str) -> id {
@@ -650,6 +737,8 @@ fn parse_html(html: &str) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut text = String::new();
     let mut images: Vec<(String, Option<String>)> = Vec::new();
+    let mut float_align = Align::Center;
+    let mut images_align = Align::Center;
     let mut heading: Option<u8> = None;
     let mut centered = 0u32;
     let mut skip_depth = 0u32; // inside <head>, <style>, <script>, <title>
@@ -690,9 +779,13 @@ fn parse_html(html: &str) -> Vec<Block> {
         text.clear();
         *text_link = None;
     }
-    fn flush_images(blocks: &mut Vec<Block>, images: &mut Vec<(String, Option<String>)>) {
+    fn flush_images(
+        blocks: &mut Vec<Block>,
+        images: &mut Vec<(String, Option<String>)>,
+        align: Align,
+    ) {
         if !images.is_empty() {
-            blocks.push(Block::Images(std::mem::take(images)));
+            blocks.push(Block::Images(std::mem::take(images), align));
         }
     }
     fn attribute(tag: &str, name: &str) -> Option<String> {
@@ -756,6 +849,9 @@ fn parse_html(html: &str) -> Vec<Block> {
                         &mut text_link,
                     );
                     if let Some(src) = attribute(tag, "src") {
+                        if images.is_empty() {
+                            images_align = float_align;
+                        }
                         images.push((src, link.clone()));
                     }
                 }
@@ -781,7 +877,7 @@ fn parse_html(html: &str) -> Vec<Block> {
                     }
                 }
                 "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
-                    flush_images(&mut blocks, &mut images);
+                    flush_images(&mut blocks, &mut images, images_align);
                     flush_text(
                         &mut blocks,
                         &mut text,
@@ -813,6 +909,9 @@ fn parse_html(html: &str) -> Vec<Block> {
                         .unwrap_or_default()
                         .to_ascii_lowercase()
                         .replace(' ', "");
+                    if name == "div" {
+                        align_state(&mut float_align, closing, &style);
+                    }
                     if !closing && (align == "center" || style.contains("text-align:center")) {
                         centered += 1;
                     } else if closing && centered > 0 && name == "div" {
@@ -832,14 +931,14 @@ fn parse_html(html: &str) -> Vec<Block> {
         }
         let decoded = decode_entities(piece);
         if !decoded.trim().is_empty() {
-            flush_images(&mut blocks, &mut images);
+            flush_images(&mut blocks, &mut images, images_align);
             if link.is_some() && text_link.is_none() {
                 text_link = link.clone();
             }
         }
         text.push_str(&decoded);
     }
-    flush_images(&mut blocks, &mut images);
+    flush_images(&mut blocks, &mut images, images_align);
     flush_text(
         &mut blocks,
         &mut text,
@@ -848,6 +947,17 @@ fn parse_html(html: &str) -> Vec<Block> {
         &mut text_link,
     );
     blocks
+}
+
+/// Where floated content goes: a div with `float:left` or `float:right`.
+fn align_state(align: &mut Align, closing: bool, style: &str) {
+    if closing {
+        *align = Align::Center;
+    } else if style.contains("float:right") {
+        *align = Align::Right;
+    } else if style.contains("float:left") {
+        *align = Align::Left;
+    }
 }
 
 fn decode_entities(text: &str) -> String {
@@ -859,7 +969,14 @@ fn decode_entities(text: &str) -> String {
     while let Some(at) = rest.find('&') {
         out.push_str(&rest[..at]);
         rest = &rest[at..];
-        let Some(end) = rest[..rest.len().min(12)].find(';') else {
+        // Entities are short; look a few characters ahead (not bytes: the
+        // text may be UTF-8).
+        let end = rest
+            .char_indices()
+            .take(12)
+            .find(|&(_, c)| c == ';')
+            .map(|(i, _)| i);
+        let Some(end) = end else {
             out.push('&');
             rest = &rest[1..];
             continue;

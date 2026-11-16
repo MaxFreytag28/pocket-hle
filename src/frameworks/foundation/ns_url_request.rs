@@ -83,8 +83,17 @@ pub const CLASSES: ClassExports = objc_classes! {
         timeout_interval,
     );
 
-    // Preserving old behaviour
-    if !env.options.network_access {
+    // Preserving old behaviour for network URLs. Other schemes (local files,
+    // or ones an app handles itself in a web view delegate) never touch the
+    // network, so requests for them are fine.
+    let scheme: id = msg![env; url scheme];
+    let scheme = if scheme == nil {
+        String::new()
+    } else {
+        to_rust_string(env, scheme).to_ascii_lowercase()
+    };
+    let is_network = matches!(scheme.as_str(), "http" | "https" | "ftp");
+    if is_network && !env.options.network_access {
         log_dbg!(
             "Network access is disabled, [(NSURLRequest *){:?} initWithURL:{} cachePolicy:{} timeoutInterval:{}] -> nil",
             this,

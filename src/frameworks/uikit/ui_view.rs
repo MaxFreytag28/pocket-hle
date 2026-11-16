@@ -13,9 +13,9 @@ pub mod ui_control;
 pub mod ui_image_view;
 pub mod ui_label;
 pub mod ui_navigation_bar;
-pub mod ui_table_view_cell;
 pub mod ui_picker_view;
 pub mod ui_scroll_view;
+pub mod ui_table_view_cell;
 pub mod ui_web_view;
 pub mod ui_window;
 
@@ -26,11 +26,11 @@ use crate::frameworks::core_graphics::cg_context::{CGContextClearRect, CGContext
 use crate::frameworks::core_graphics::{CGFloat, CGPoint, CGRect, CGSize};
 use crate::frameworks::foundation::ns_string::get_static_str;
 use crate::frameworks::foundation::{ns_array, NSInteger, NSUInteger};
+use crate::mem::MutVoidPtr;
 use crate::objc::{
     autorelease, id, msg, msg_class, nil, objc_classes, release, retain, Class, ClassExports,
     HostObject, NSZonePtr, ObjC,
 };
-use crate::mem::MutVoidPtr;
 use crate::objc::{msg_send, SEL};
 use crate::Environment;
 use std::cell::RefCell;

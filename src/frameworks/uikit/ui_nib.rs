@@ -354,7 +354,7 @@ fn load_nib_file(env: &mut Environment, ui_nib: id, path: GuestPathBuf) -> Resul
     // We don't need to do anything with the list of objects, but deserializing
     // it ensures everything else is deserialized.
     let objects_key = get_static_str(env, "UINibObjectsKey");
-    let _objects: id = msg![env; unarchiver decodeObjectForKey:objects_key];
+    let objects: id = msg![env; unarchiver decodeObjectForKey:objects_key];
 
     // Connect all the outlets with UIRuntimeOutletConnection
     let conns_key = get_static_str(env, "UINibConnectionsKey");
@@ -363,6 +363,24 @@ fn load_nib_file(env: &mut Environment, ui_nib: id, path: GuestPathBuf) -> Resul
     for i in 0..conns_count {
         let conn: id = msg![env; conns objectAtIndex:i];
         () = msg![env; conn connect];
+    }
+
+    // Once everything is connected, objects from the nib get to finish their
+    // setup (apps often fill in data here).
+    let awake = env
+        .objc
+        .register_host_selector("awakeFromNib".to_string(), &mut env.mem);
+    let objects_count: NSUInteger = if objects == nil {
+        0
+    } else {
+        msg![env; objects count]
+    };
+    for i in 0..objects_count {
+        let object: id = msg![env; objects objectAtIndex:i];
+        let responds: bool = msg![env; object respondsToSelector:awake];
+        if responds {
+            () = msg![env; object awakeFromNib];
+        }
     }
 
     // Make visible windows visible

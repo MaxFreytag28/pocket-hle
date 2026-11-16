@@ -464,7 +464,11 @@ forControlEvents:(NSUInteger)_events {
 - (())dealloc {
     let host = env.objc.borrow_mut::<UINavigationBarHostObject>(this);
     let items = std::mem::take(&mut host.items);
+    let shown = std::mem::take(&mut host.shown_custom_views);
     let objects = [host.tint_color, host.title_label, host.left_button, host.right_button];
+    for view in shown {
+        release(env, view);
+    }
     for item in items {
         env.objc.borrow_mut::<UINavigationItemHostObject>(item).bar = nil;
         release(env, item);
@@ -766,16 +770,14 @@ fn lay_out(env: &mut Environment, bar: id) {
     () = msg![env; bar setBackgroundColor:background];
     let button_color: id = msg![env; background colorWithAlphaComponent:(0.6 as CGFloat)];
 
-    // Remove custom views shown for the previous item.
+    // The custom views shown so far are let go of only after the new ones
+    // are shown: a view that stays shown must stay held throughout.
     let old_views = std::mem::take(
         &mut env
             .objc
             .borrow_mut::<UINavigationBarHostObject>(bar)
             .shown_custom_views,
     );
-    for view in old_views {
-        () = msg![env; view removeFromSuperview];
-    }
 
     let bounds: CGRect = msg![env; bar bounds];
     let width = bounds.size.width;
@@ -871,16 +873,42 @@ fn lay_out(env: &mut Environment, bar: id) {
             size: view_size,
         };
         () = msg![env; title_view setFrame:frame];
-        () = msg![env; bar addSubview:title_view];
-        env.objc
-            .borrow_mut::<UINavigationBarHostObject>(bar)
-            .shown_custom_views
-            .push(title_view);
+        show_custom_view(env, bar, title_view);
     } else {
         () = msg![env; title_label setHidden:false];
         () = msg![env; title_label setText:title];
         () = msg![env; title_label setFrame:title_frame];
     }
+
+    let shown = env
+        .objc
+        .borrow::<UINavigationBarHostObject>(bar)
+        .shown_custom_views
+        .clone();
+    for view in old_views {
+        if !shown.contains(&view) {
+            let superview: id = msg![env; view superview];
+            if superview == bar {
+                () = msg![env; view removeFromSuperview];
+            }
+        }
+        release(env, view);
+    }
+}
+
+/// Show a view of the app's (a bar button item's custom view or a title
+/// view) on the bar. The bar holds it while it is shown: the app may let go
+/// of it, and it may be shown again by a later layout.
+fn show_custom_view(env: &mut Environment, bar: id, view: id) {
+    retain(env, view);
+    let superview: id = msg![env; view superview];
+    if superview != bar {
+        () = msg![env; bar addSubview:view];
+    }
+    env.objc
+        .borrow_mut::<UINavigationBarHostObject>(bar)
+        .shown_custom_views
+        .push(view);
 }
 
 /// Show one side's bar button item (or hide its button) and return the
@@ -928,11 +956,7 @@ fn place_button(
             size: bounds.size,
         };
         () = msg![env; custom_view setFrame:frame];
-        () = msg![env; bar addSubview:custom_view];
-        env.objc
-            .borrow_mut::<UINavigationBarHostObject>(bar)
-            .shown_custom_views
-            .push(custom_view);
+        show_custom_view(env, bar, custom_view);
         return 5.0 + bounds.size.width;
     }
     let text = if title == nil {

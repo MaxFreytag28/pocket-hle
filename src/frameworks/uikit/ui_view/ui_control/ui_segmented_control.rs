@@ -30,6 +30,8 @@ struct UISegmentedControlHostObject {
     selected: NSInteger,
     momentary: bool,
     style: NSInteger,
+    /// `UIColor*`
+    tint_color: id,
 }
 impl_HostObject_with_superclass!(UISegmentedControlHostObject);
 impl Default for UISegmentedControlHostObject {
@@ -41,6 +43,7 @@ impl Default for UISegmentedControlHostObject {
             selected: UISegmentedControlNoSegment,
             momentary: false,
             style: 0,
+            tint_color: nil,
         }
     }
 }
@@ -86,6 +89,8 @@ pub const CLASSES: ClassExports = objc_classes! {
     let host = host(env, this);
     let contents = std::mem::take(&mut host.contents);
     let buttons = std::mem::take(&mut host.buttons);
+    let tint_color = host.tint_color;
+    release(env, tint_color);
     for object in contents.into_iter().chain(buttons) {
         release(env, object);
     }
@@ -114,7 +119,15 @@ pub const CLASSES: ClassExports = objc_classes! {
 - (())setSegmentedControlStyle:(NSInteger)style {
     host(env, this).style = style;
 }
-- (())setTintColor:(id)_color {}
+- (id)tintColor {
+    host(env, this).tint_color
+}
+- (())setTintColor:(id)color { // UIColor*
+    retain(env, color);
+    let old = std::mem::replace(&mut host(env, this).tint_color, color);
+    release(env, old);
+    show_selection(env, this);
+}
 - (id)titleForSegmentAtIndex:(NSUInteger)index {
     let class = env.objc.get_known_class("NSString", &mut env.mem);
     let content = host(env, this).contents.get(index as usize).copied().unwrap_or(nil);
@@ -235,6 +248,20 @@ fn lay_out(env: &mut Environment, this: id) {
             },
         };
         () = msg![env; button setFrame:frame];
+        // Buttons don't place their image themselves: centre it.
+        let image: id = msg![env; button currentImage];
+        if image != nil {
+            let size: CGSize = msg![env; image size];
+            let image_view: id = msg![env; button imageView];
+            let image_frame = CGRect {
+                origin: CGPoint {
+                    x: ((frame.size.width - size.width) / 2.0).round(),
+                    y: ((frame.size.height - size.height) / 2.0).round(),
+                },
+                size,
+            };
+            () = msg![env; image_view setFrame:image_frame];
+        }
     }
 }
 
