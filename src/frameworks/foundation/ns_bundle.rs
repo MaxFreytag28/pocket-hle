@@ -192,9 +192,26 @@ pub const CLASSES: ClassExports = objc_classes! {
 
     // TODO: Support look up for device specific resources, e.g. ~iphone
 
+    // Then the app's own language, as iPhone OS does.
+    if let Some(region) = env.bundle.development_region().map(str::to_string) {
+        let mut lprojs = vec![format!("{}.lproj", region)];
+        if let Some(&(_, names)) = LANG_ID_TO_LANG_PROJ.iter().find(|&&(code, names)| {
+            code.eq_ignore_ascii_case(&region)
+                || names.iter().any(|name| name.trim_end_matches(".lproj").eq_ignore_ascii_case(&region))
+        }) {
+            lprojs.extend(names.iter().map(|name| name.to_string()));
+        }
+        for lproj in lprojs {
+            let lproj: id = ns_string::from_rust_string(env, lproj);
+            let path = path_for_resource_helper(env, this, name, lproj, directory, extension);
+            release(env, lproj);
+            if path != nil {
+                return path;
+            }
+        }
+    }
+
     // As a last resort, fallback to English
-    // TODO: fallback to a development language (CFBundleDevelopmentRegion from
-    // Info.plist)
     if !unknown_codes.is_empty() {
         log!("TODO: language codes {:?} aren't mapped to a language name, falling back to English", unknown_codes);
     }
@@ -275,6 +292,10 @@ pub const CLASSES: ClassExports = objc_classes! {
     res
 }
 
+- (id)localizedInfoDictionary {
+    // TODO: InfoPlist.strings
+    msg![env; this infoDictionary]
+}
 - (id)infoDictionary {
     let &NSBundleHostObject {
         bundle_path,

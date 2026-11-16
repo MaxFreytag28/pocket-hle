@@ -344,6 +344,15 @@ pub const CLASSES: ClassExports = objc_classes! {
     autorelease(env, new)
 }
 
++ (id)localizedStringWithFormat:(id)format, // NSString*
+                                ...args {
+    // TODO: use the user's locale for numbers
+    let res = with_format(env, format, args.start());
+    let res = from_rust_string(env, res);
+    let res = autorelease(env, res);
+    msg![env; this stringWithString:res]
+}
+
 + (id)stringWithFormat:(id)format, // NSString*
                        ...args {
     let res = with_format(env, format, args.start());
@@ -1209,6 +1218,7 @@ pub const CLASSES: ClassExports = objc_classes! {
 // default methods that would be inappropriate for mutability.
 @implementation NSMutableString: NSString
 
+
 + (id)allocWithZone:(NSZonePtr)zone {
     // NSMutableString might be subclassed by something
     // which needs allocWithZone: to have the normal behaviour.
@@ -1224,6 +1234,35 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 
 // NSCopying implementation
+- (NSUInteger)replaceOccurrencesOfString:(id)target // NSString*
+                              withString:(id)replacement // NSString*
+                                 options:(NSUInteger)_options
+                                   range:(NSRange)range {
+    // TODO: options (e.g. case-insensitive)
+    let text = to_rust_string(env, this).to_string();
+    let target_text = to_rust_string(env, target).to_string();
+    if target_text.is_empty() {
+        return 0;
+    }
+    // The range is in UTF-16 code units.
+    let units: Vec<u16> = text.encode_utf16().collect();
+    let start = (range.location as usize).min(units.len());
+    let end = (start + range.length as usize).min(units.len());
+    let before = String::from_utf16_lossy(&units[..start]);
+    let middle = String::from_utf16_lossy(&units[start..end]);
+    let after = String::from_utf16_lossy(&units[end..]);
+    let count = middle.matches(&target_text).count();
+    if count == 0 {
+        return 0;
+    }
+    let replacement_text = to_rust_string(env, replacement).to_string();
+    let new_text = format!("{}{}{}", before, middle.replace(&target_text, &replacement_text), after);
+    let new_text = from_rust_string(env, new_text);
+    () = msg![env; this setString:new_text];
+    release(env, new_text);
+    count as NSUInteger
+}
+
 - (id)copyWithZone:(NSZonePtr)_zone {
     let new: id = msg_class![env; NSString alloc];
     msg![env; new initWithString:this]

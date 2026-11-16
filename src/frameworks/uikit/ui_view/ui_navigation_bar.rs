@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
-//! `UINavigationBar`, `UINavigationItem` and `UIBarButtonItem`.
+//! `UINavigationBar`, `UINavigationItem`, `UIBarButtonItem` and `UIToolbar`.
 //!
 //! The bar is drawn simply: a coloured strip with the top item's title in
 //! the middle and its bar button items as plain buttons on the left and
@@ -48,6 +48,8 @@ struct UIBarButtonItemHostObject {
     enabled: bool,
     width: CGFloat,
     tag: NSInteger,
+    /// For the standard items: which one.
+    system_item: Option<UIBarButtonSystemItem>,
 }
 impl HostObject for UIBarButtonItemHostObject {}
 impl Default for UIBarButtonItemHostObject {
@@ -61,6 +63,7 @@ impl Default for UIBarButtonItemHostObject {
             enabled: true,
             width: 0.0,
             tag: 0,
+            system_item: None,
         }
     }
 }
@@ -102,6 +105,22 @@ struct UINavigationBarHostObject {
     shown_custom_views: Vec<id>,
 }
 impl_HostObject_with_superclass!(UINavigationBarHostObject);
+
+#[derive(Default)]
+struct UIToolbarHostObject {
+    superclass: super::UIViewHostObject,
+    /// `UIBarButtonItem*`s, retained.
+    items: Vec<id>,
+    bar_style: NSInteger,
+    /// `UIColor*`
+    tint_color: id,
+    /// The buttons shown for the items (retained, subviews), with their item.
+    buttons: Vec<(id, id)>,
+}
+impl_HostObject_with_superclass!(UIToolbarHostObject);
+
+const UIBarButtonSystemItemFlexibleSpace: UIBarButtonSystemItem = 5;
+const UIBarButtonSystemItemFixedSpace: UIBarButtonSystemItem = 6;
 
 /// The text shown for one of the standard bar button items.
 fn system_item_title(item: UIBarButtonSystemItem) -> &'static str {
@@ -172,7 +191,9 @@ pub const CLASSES: ClassExports = objc_classes! {
                            target:(id)target
                            action:(SEL)action {
     let title = get_static_str(env, system_item_title(item));
-    msg![env; this initWithTitle:title style:0 target:target action:action]
+    let this: id = msg![env; this initWithTitle:title style:0 target:target action:action];
+    env.objc.borrow_mut::<UIBarButtonItemHostObject>(this).system_item = Some(item);
+    this
 }
 
 - (id)initWithCustomView:(id)view { // UIView*
@@ -186,14 +207,22 @@ pub const CLASSES: ClassExports = objc_classes! {
     let title: id = msg![env; coder decodeObjectForKey:key];
     let key = get_static_str(env, "UIStyle");
     let style: NSInteger = msg![env; coder decodeIntegerForKey:key];
-    let key = get_static_str(env, "UISystemItemIdentifier");
-    let is_system: bool = msg![env; coder containsValueForKey:key];
-    let title = if title == nil && is_system {
+    let key = get_static_str(env, "UIIsSystemItem");
+    let is_system: bool = msg![env; coder decodeBoolForKey:key];
+    let system_item = if is_system {
+        let key = get_static_str(env, "UISystemItem");
         let item: NSInteger = msg![env; coder decodeIntegerForKey:key];
-        get_static_str(env, system_item_title(item))
+        Some(item)
     } else {
-        title
+        None
     };
+    let title = match system_item {
+        Some(item) if title == nil => get_static_str(env, system_item_title(item)),
+        _ => title,
+    };
+    let key = get_static_str(env, "UIEnabled");
+    let has_enabled: bool = msg![env; coder containsValueForKey:key];
+    let enabled: bool = !has_enabled || msg![env; coder decodeBoolForKey:key];
     let key = get_static_str(env, "UICustomView");
     let custom_view: id = msg![env; coder decodeObjectForKey:key];
     let key = get_static_str(env, "UITag");
@@ -209,6 +238,8 @@ pub const CLASSES: ClassExports = objc_classes! {
     host.custom_view = custom_view;
     host.tag = tag;
     host.width = width;
+    host.system_item = system_item;
+    host.enabled = enabled;
     this
 }
 
@@ -577,6 +608,102 @@ forControlEvents:(NSUInteger)_events {
 
 @end
 
+@implementation UIToolbar: UIView
+
++ (id)allocWithZone:(NSZonePtr)_zone {
+    let host_object = Box::<UIToolbarHostObject>::default();
+    env.objc.alloc_object(this, host_object, &mut env.mem)
+}
+
+- (id)initWithCoder:(id)coder {
+    let this: id = msg_super![env; this initWithCoder:coder];
+    let key = get_static_str(env, "UIBarStyle");
+    let bar_style: NSInteger = msg![env; coder decodeIntegerForKey:key];
+    env.objc.borrow_mut::<UIToolbarHostObject>(this).bar_style = bar_style;
+    let key = get_static_str(env, "UIItems");
+    let items: id = msg![env; coder decodeObjectForKey:key];
+    () = msg![env; this setItems:items];
+    this
+}
+
+- (())dealloc {
+    let host = env.objc.borrow_mut::<UIToolbarHostObject>(this);
+    let items = std::mem::take(&mut host.items);
+    let buttons = std::mem::take(&mut host.buttons);
+    let tint_color = host.tint_color;
+    for object in items.into_iter().chain(buttons.into_iter().map(|(button, _)| button)) {
+        release(env, object);
+    }
+    release(env, tint_color);
+    msg_super![env; this dealloc]
+}
+
+- (id)items {
+    let items = env.objc.borrow::<UIToolbarHostObject>(this).items.clone();
+    for &item in &items {
+        retain(env, item);
+    }
+    let array = crate::frameworks::foundation::ns_array::from_vec(env, items);
+    autorelease(env, array)
+}
+- (())setItems:(id)items { // NSArray*
+    let mut new_items = Vec::new();
+    if items != nil {
+        let count: NSUInteger = msg![env; items count];
+        for i in 0..count {
+            let item: id = msg![env; items objectAtIndex:i];
+            retain(env, item);
+            new_items.push(item);
+        }
+    }
+    let old = std::mem::replace(&mut env.objc.borrow_mut::<UIToolbarHostObject>(this).items, new_items);
+    for item in old {
+        release(env, item);
+    }
+    () = msg![env; this layoutSubviews];
+}
+- (())setItems:(id)items animated:(bool)_animated {
+    () = msg![env; this setItems:items];
+}
+- (NSInteger)barStyle {
+    env.objc.borrow::<UIToolbarHostObject>(this).bar_style
+}
+- (())setBarStyle:(NSInteger)style {
+    env.objc.borrow_mut::<UIToolbarHostObject>(this).bar_style = style;
+    () = msg![env; this layoutSubviews];
+}
+- (id)tintColor {
+    env.objc.borrow::<UIToolbarHostObject>(this).tint_color
+}
+- (())setTintColor:(id)color { // UIColor*
+    set_retained(env, |env| &mut env.objc.borrow_mut::<UIToolbarHostObject>(this).tint_color, color);
+    () = msg![env; this layoutSubviews];
+}
+- (())setTranslucent:(bool)_translucent {}
+
+- (())setFrame:(CGRect)frame {
+    () = msg_super![env; this setFrame:frame];
+    () = msg![env; this layoutSubviews];
+}
+- (())layoutSubviews {
+    lay_out_toolbar(env, this);
+}
+
+- (())_touchHLE_itemTapped:(id)sender {
+    let item = env
+        .objc
+        .borrow::<UIToolbarHostObject>(this)
+        .buttons
+        .iter()
+        .find(|&&(button, _)| button == sender)
+        .map(|&(_, item)| item);
+    if let Some(item) = item {
+        () = msg![env; item _touchHLE_sendAction];
+    }
+}
+
+@end
+
 };
 
 /// Create the title label and the two buttons.
@@ -842,4 +969,128 @@ fn place_button(
     () = msg![env; button setFrame:frame];
     () = msg![env; button setHidden:false];
     5.0 + button_width
+}
+
+/// Lay out the toolbar's items from left to right: buttons (or custom views)
+/// with flexible spaces sharing out the room that is left.
+fn lay_out_toolbar(env: &mut Environment, toolbar: id) {
+    let old_buttons =
+        std::mem::take(&mut env.objc.borrow_mut::<UIToolbarHostObject>(toolbar).buttons);
+    for (button, _) in old_buttons {
+        () = msg![env; button removeFromSuperview];
+        release(env, button);
+    }
+    let &UIToolbarHostObject {
+        bar_style,
+        tint_color,
+        ..
+    } = env.objc.borrow(toolbar);
+    let items = env
+        .objc
+        .borrow::<UIToolbarHostObject>(toolbar)
+        .items
+        .clone();
+
+    let background: id = if tint_color != nil {
+        tint_color
+    } else if bar_style == UIBarStyleDefault {
+        msg_class![env; UIColor colorWithRed:(0.43 as CGFloat) green:(0.52 as CGFloat) blue:(0.64 as CGFloat) alpha:(1.0 as CGFloat)]
+    } else {
+        msg_class![env; UIColor colorWithRed:(0.1 as CGFloat) green:(0.1 as CGFloat) blue:(0.1 as CGFloat) alpha:(1.0 as CGFloat)]
+    };
+    () = msg![env; toolbar setBackgroundColor:background];
+    let button_color: id = msg![env; background colorWithAlphaComponent:(0.6 as CGFloat)];
+    let white: id = msg_class![env; UIColor whiteColor];
+
+    let bounds: CGRect = msg![env; toolbar bounds];
+    let (width, height) = (bounds.size.width, bounds.size.height);
+    let gap: CGFloat = 6.0;
+
+    // Widths: fixed for buttons and custom views, shared for flexible space.
+    let mut widths = Vec::new();
+    let mut flexible = 0;
+    for &item in &items {
+        let host = env.objc.borrow::<UIBarButtonItemHostObject>(item);
+        let (system_item, custom_view, title, width) =
+            (host.system_item, host.custom_view, host.title, host.width);
+        let w = if system_item == Some(UIBarButtonSystemItemFlexibleSpace) {
+            flexible += 1;
+            0.0
+        } else if system_item == Some(UIBarButtonSystemItemFixedSpace) {
+            width
+        } else if custom_view != nil {
+            let view_bounds: CGRect = msg![env; custom_view bounds];
+            view_bounds.size.width
+        } else if width > 0.0 {
+            width
+        } else {
+            let text = if title == nil {
+                String::new()
+            } else {
+                to_rust_string(env, title).to_string()
+            };
+            (text.chars().count() as CGFloat * 8.0 + 20.0).max(40.0)
+        };
+        widths.push(w);
+    }
+    let used: CGFloat = widths.iter().sum::<CGFloat>() + gap * (items.len() as CGFloat + 1.0);
+    let flexible_width = if flexible > 0 {
+        ((width - used) / flexible as CGFloat).max(0.0)
+    } else {
+        0.0
+    };
+
+    let mut x = gap;
+    for (&item, &w) in items.iter().zip(&widths) {
+        let host = env.objc.borrow::<UIBarButtonItemHostObject>(item);
+        let (system_item, custom_view, title) = (host.system_item, host.custom_view, host.title);
+        if system_item == Some(UIBarButtonSystemItemFlexibleSpace) {
+            x += flexible_width + gap;
+            continue;
+        }
+        if system_item == Some(UIBarButtonSystemItemFixedSpace) {
+            x += w + gap;
+            continue;
+        }
+        if custom_view != nil {
+            let view_bounds: CGRect = msg![env; custom_view bounds];
+            let frame = CGRect {
+                origin: CGPoint {
+                    x,
+                    y: ((height - view_bounds.size.height) / 2.0).round(),
+                },
+                size: view_bounds.size,
+            };
+            () = msg![env; custom_view setFrame:frame];
+            () = msg![env; toolbar addSubview:custom_view];
+            x += w + gap;
+            continue;
+        }
+        let button: id = msg_class![env; UIButton buttonWithType:UIButtonTypeCustom];
+        retain(env, button);
+        let font: id = msg_class![env; UIFont boldSystemFontOfSize:(12.0 as CGFloat)];
+        () = msg![env; button setFont:font];
+        () = msg![env; button setTitleColor:white forState:UIControlStateNormal];
+        () = msg![env; button setTitle:title forState:UIControlStateNormal];
+        () = msg![env; button setBackgroundColor:button_color];
+        let frame = CGRect {
+            origin: CGPoint {
+                x,
+                y: ((height - 30.0) / 2.0).round(),
+            },
+            size: CGSize {
+                width: w,
+                height: 30.0,
+            },
+        };
+        () = msg![env; button setFrame:frame];
+        let action = env.objc.lookup_selector("_touchHLE_itemTapped:").unwrap();
+        () = msg![env; button addTarget:toolbar action:action forControlEvents:UIControlEventTouchUpInside];
+        () = msg![env; toolbar addSubview:button];
+        env.objc
+            .borrow_mut::<UIToolbarHostObject>(toolbar)
+            .buttons
+            .push((button, item));
+        x += w + gap;
+    }
 }

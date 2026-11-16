@@ -372,6 +372,9 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 - (())deselectRowAtIndexPath:(id)path // NSIndexPath*
                     animated:(bool)_animated {
+    if path == nil {
+        return;
+    }
     let position = section_and_row(env, path);
     if host(env, this).selected == Some(position) {
         set_selected(env, this, None);
@@ -400,7 +403,9 @@ pub const CLASSES: ClassExports = objc_classes! {
     ensure_loaded(env, this);
 }
 - (())layoutSubviews {
-    ensure_loaded(env, this);
+    // Not loaded here: views are laid out when an app starts, before it has
+    // its data ready.
+    relayout_if_loaded(env, this);
 }
 
 - (())touchesBegan:(id)touches withEvent:(id)_event { // NSSet* of UITouch*

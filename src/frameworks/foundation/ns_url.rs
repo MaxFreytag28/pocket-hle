@@ -127,6 +127,28 @@ pub const CLASSES: ClassExports = objc_classes! {
     }
 }
 
+- (id)scheme {
+    let text: id = msg![env; this absoluteString];
+    let text = to_rust_string(env, text).to_string();
+    match text.split_once(':') {
+        Some((scheme, _)) if !scheme.contains('/') => {
+            let scheme = from_rust_string(env, scheme.to_string());
+            autorelease(env, scheme)
+        }
+        _ => nil,
+    }
+}
+- (id)resourceSpecifier {
+    let text: id = msg![env; this absoluteString];
+    let text = to_rust_string(env, text).to_string();
+    let rest = match text.split_once(':') {
+        Some((scheme, rest)) if !scheme.contains('/') => rest.to_string(),
+        _ => text,
+    };
+    let rest = from_rust_string(env, rest);
+    autorelease(env, rest)
+}
+
 - (id)path {
     match *env.objc.borrow(this) {
         NSURLHostObject::FileURL { ns_string, .. } => ns_string,
@@ -146,7 +168,6 @@ pub const CLASSES: ClassExports = objc_classes! {
         NSURLHostObject::FileURL { ns_string, .. } => ns_string,
         NSURLHostObject::OtherURL { ns_string } => {
             // TODO: full RFC 1808 resolution
-            assert!(to_rust_string(env, ns_string).starts_with("http"));
             ns_string
         },
     }

@@ -30,6 +30,19 @@ struct UIViewControllerHostObject {
     /// of the root view, may be nil.
     /// `NSString*`
     nib_name: id,
+    /// Whether `viewDidLoad` was sent for the view.
+    view_did_load_sent: bool,
+    /// `NSString*`
+    title: id,
+    /// `UINavigationItem*`, created when first asked for.
+    navigation_item: id,
+    /// The controller this one is shown in, e.g. a navigation controller
+    /// (weak).
+    parent: id,
+    /// The controller shown modally over this one (retained), and the one
+    /// this one is shown modally over (weak).
+    modal: id,
+    presenting: id,
     /// Bundle to be used for load
     /// of the nib by name, may be nil.
     /// `NSBundle*`
@@ -68,12 +81,37 @@ pub const CLASSES: ClassExports = objc_classes! {
 
     () = msg![env; this setView:view];
 
+    let key = get_static_str(env, "UINibName");
+    let nib_name: id = msg![env; coder decodeObjectForKey:key];
+    retain(env, nib_name);
+    let key = get_static_str(env, "UITitle");
+    let title: id = msg![env; coder decodeObjectForKey:key];
+    let title: id = msg![env; title copy];
+    let key = get_static_str(env, "UINavigationItem");
+    let navigation_item: id = msg![env; coder decodeObjectForKey:key];
+    retain(env, navigation_item);
+
+    let host = env.objc.borrow_mut::<UIViewControllerHostObject>(this);
+    host.nib_name = nib_name;
+    host.title = title;
+    host.navigation_item = navigation_item;
+    // The parent (UIParentViewController) isn't decoded: it is still being
+    // decoded itself, and decoding it again would never end. The parent sets
+    // itself.
+
+
     this
 }
 
 - (())dealloc {
-    let &UIViewControllerHostObject { view, nib_name, bundle } = env.objc.borrow(this);
+    let &UIViewControllerHostObject { view, nib_name, bundle, title, navigation_item, modal, .. } = env.objc.borrow(this);
+    release(env, title);
+    release(env, navigation_item);
+    release(env, modal);
 
+    if view != nil {
+        set_view_controller(env, view, nil);
+    }
     release(env, view);
     release(env, nib_name);
     release(env, bundle);
@@ -142,12 +180,14 @@ pub const CLASSES: ClassExports = objc_classes! {
     let view = env.objc.borrow_mut::<UIViewControllerHostObject>(this).view;
     if view == nil {
         () = msg![env; this loadView];
-        let view = env.objc.borrow_mut::<UIViewControllerHostObject>(this).view;
-        () = msg![env; this viewDidLoad];
-        view
-    } else {
-        view
     }
+    let view = env.objc.borrow_mut::<UIViewControllerHostObject>(this).view;
+    // Also for a view that came from a nib file with the controller.
+    if view != nil && !env.objc.borrow::<UIViewControllerHostObject>(this).view_did_load_sent {
+        env.objc.borrow_mut::<UIViewControllerHostObject>(this).view_did_load_sent = true;
+        () = msg![env; this viewDidLoad];
+    }
+    view
 }
 
 // Usually overridden by the application
@@ -167,15 +207,107 @@ pub const CLASSES: ClassExports = objc_classes! {
     log_dbg!("[(UIViewController*){:?} viewDidDisappear:{}]", this, animated);
 }
 
+- (id)title {
+    env.objc.borrow::<UIViewControllerHostObject>(this).title
+}
 - (())setTitle:(id)title { // NSString *
-    log!("TODO: [(UIViewController*){:?} setTitle:{}]", this, to_rust_string(env, title)); // TODO
+    let title: id = msg![env; title copy];
+    let old = std::mem::replace(&mut env.objc.borrow_mut::<UIViewControllerHostObject>(this).title, title);
+    release(env, old);
+    // The navigation item shows the controller's title.
+    let item = env.objc.borrow::<UIViewControllerHostObject>(this).navigation_item;
+    if item != nil {
+        () = msg![env; item setTitle:title];
+    }
+}
+
+- (id)navigationItem {
+    let item = env.objc.borrow::<UIViewControllerHostObject>(this).navigation_item;
+    if item != nil {
+        return item;
+    }
+    let title = env.objc.borrow::<UIViewControllerHostObject>(this).title;
+    let item: id = msg_class![env; UINavigationItem alloc];
+    let item: id = msg![env; item initWithTitle:title];
+    env.objc.borrow_mut::<UIViewControllerHostObject>(this).navigation_item = item;
+    item
+}
+
+- (id)parentViewController {
+    env.objc.borrow::<UIViewControllerHostObject>(this).parent
+}
+- (())_touchHLE_setParentViewController:(id)parent {
+    env.objc.borrow_mut::<UIViewControllerHostObject>(this).parent = parent;
+}
+- (id)navigationController {
+    let class = env.objc.get_known_class("UINavigationController", &mut env.mem);
+    let mut controller = env.objc.borrow::<UIViewControllerHostObject>(this).parent;
+    while controller != nil {
+        let is_navigation: bool = msg![env; controller isKindOfClass:class];
+        if is_navigation {
+            return controller;
+        }
+        controller = env.objc.borrow::<UIViewControllerHostObject>(controller).parent;
+    }
+    nil
+}
+
+- (i32)interfaceOrientation {
+    // TODO: follow the device's orientation
+    1 // UIInterfaceOrientationPortrait
+}
+- (bool)shouldAutorotateToInterfaceOrientation:(i32)orientation {
+    orientation == 1
+}
+
+- (id)modalViewController {
+    env.objc.borrow::<UIViewControllerHostObject>(this).modal
+}
+- (())presentModalViewController:(id)controller // UIViewController*
+                        animated:(bool)_animated {
+    retain(env, controller);
+    let old = std::mem::replace(&mut env.objc.borrow_mut::<UIViewControllerHostObject>(this).modal, controller);
+    release(env, old);
+    env.objc.borrow_mut::<UIViewControllerHostObject>(controller).presenting = this;
+    env.objc.borrow_mut::<UIViewControllerHostObject>(controller).parent = this;
+
+    // Shown over everything, filling the application frame.
+    let own_view: id = msg![env; this view];
+    let window: id = msg![env; own_view window];
+    let window: id = if window != nil {
+        window
+    } else {
+        let app: id = msg_class![env; UIApplication sharedApplication];
+        msg![env; app keyWindow]
+    };
+    let screen: id = msg_class![env; UIScreen mainScreen];
+    let frame: CGRect = msg![env; screen applicationFrame];
+    let view: id = msg![env; controller view];
+    () = msg![env; view setFrame:frame];
+    () = msg![env; controller viewWillAppear:false];
+    () = msg![env; window addSubview:view];
+    () = msg![env; controller viewDidAppear:false];
 }
 - (())setEditing:(bool)editing {
     log!("TODO: [(UIViewController*){:?} setEditing:{}]", this, editing); // TODO
 }
 
 - (())dismissModalViewControllerAnimated:(bool)animated {
-    log!("TODO: [(UIViewController*){:?} dismissModalViewControllerAnimated:{}]", this, animated); // TODO
+    let &UIViewControllerHostObject { modal, presenting, .. } = env.objc.borrow(this);
+    if modal == nil {
+        // Sent to the modal controller itself: the one showing it handles it.
+        if presenting != nil {
+            () = msg![env; presenting dismissModalViewControllerAnimated:animated];
+        }
+        return;
+    }
+    let view: id = msg![env; modal view];
+    () = msg![env; modal viewWillDisappear:false];
+    () = msg![env; view removeFromSuperview];
+    () = msg![env; modal viewDidDisappear:false];
+    env.objc.borrow_mut::<UIViewControllerHostObject>(modal).presenting = nil;
+    env.objc.borrow_mut::<UIViewControllerHostObject>(this).modal = nil;
+    release(env, modal);
 }
 
 @end

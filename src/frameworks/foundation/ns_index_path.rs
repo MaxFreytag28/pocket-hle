@@ -13,7 +13,7 @@ use super::{
 };
 use crate::mem::{ConstPtr, MutPtr};
 use crate::objc::{
-    autorelease, id, msg, objc_classes, retain, ClassExports, HostObject, NSZonePtr,
+    autorelease, id, msg, nil, objc_classes, retain, ClassExports, HostObject, NSZonePtr,
 };
 use crate::Environment;
 
@@ -33,6 +33,9 @@ pub fn index_path(env: &mut Environment, indexes: Vec<NSUInteger>) -> id {
 
 /// The indexes of an index path.
 pub fn indexes(env: &Environment, path: id) -> &[NSUInteger] {
+    if path == nil {
+        return &[];
+    }
     &env.objc.borrow::<NSIndexPathHostObject>(path).indexes
 }
 

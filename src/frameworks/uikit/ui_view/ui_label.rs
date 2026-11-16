@@ -118,6 +118,13 @@ pub const CLASSES: ClassExports = objc_classes! {
 
 // TODO: initWithCoder:
 
+// TODO: draw highlighted labels in this colour
+- (id)highlightedTextColor {
+    nil
+}
+- (())setHighlightedTextColor:(id)_color {}
+- (())setHighlighted:(bool)_highlighted {}
+
 - (id)text {
     env.objc.borrow::<UILabelHostObject>(this).text
 }

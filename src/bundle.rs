@@ -142,6 +142,14 @@ impl Bundle {
         families.contains(&Some(2)) && !families.contains(&Some(1))
     }
 
+    /// The app's own language (`CFBundleDevelopmentRegion`), e.g. "de" or
+    /// "German".
+    pub fn development_region(&self) -> Option<&str> {
+        self.plist
+            .get("CFBundleDevelopmentRegion")
+            .and_then(|v| v.as_string())
+    }
+
     pub fn status_bar_hidden(&self) -> bool {
         self.plist
             .get("UIStatusBarHidden")

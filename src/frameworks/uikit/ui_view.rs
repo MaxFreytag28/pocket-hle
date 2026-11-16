@@ -30,7 +30,24 @@ use crate::objc::{
     autorelease, id, msg, msg_class, nil, objc_classes, release, retain, Class, ClassExports,
     HostObject, NSZonePtr, ObjC,
 };
+use crate::mem::MutVoidPtr;
+use crate::objc::{msg_send, SEL};
 use crate::Environment;
+use std::cell::RefCell;
+
+/// An animation block begun with `beginAnimations:context:`.
+struct AnimationBlock {
+    /// `NSString*`
+    animation_id: id,
+    context: MutVoidPtr,
+    /// Weak.
+    delegate: id,
+    will_start: Option<SEL>,
+    did_stop: Option<SEL>,
+}
+thread_local! {
+    static ANIMATION_BLOCKS: RefCell<Vec<AnimationBlock>> = const { RefCell::new(Vec::new()) };
+}
 
 #[derive(Default)]
 pub struct State {
@@ -102,6 +119,72 @@ pub const CLASSES: ClassExports = objc_classes! {
 (env, this, _cmd);
 
 @implementation UIView: UIResponder
+
+// Animation blocks. Animations aren't drawn: the changes made in a block
+// take effect immediately, and the delegate is told the animation started
+// and finished when the block is committed.
++ (())beginAnimations:(id)animation_id // NSString*
+              context:(MutVoidPtr)context {
+    retain(env, animation_id);
+    ANIMATION_BLOCKS.with(|blocks| blocks.borrow_mut().push(AnimationBlock {
+        animation_id,
+        context,
+        delegate: nil,
+        will_start: None,
+        did_stop: None,
+    }));
+}
++ (())commitAnimations {
+    let Some(block) = ANIMATION_BLOCKS.with(|blocks| blocks.borrow_mut().pop()) else {
+        return;
+    };
+    let AnimationBlock { animation_id, context, delegate, will_start, did_stop } = block;
+    if delegate != nil {
+        if let Some(sel) = will_start {
+            () = msg_send(env, (delegate, sel, animation_id, context));
+        }
+        if let Some(sel) = did_stop {
+            let finished: id = msg_class![env; NSNumber numberWithBool:true];
+            () = msg_send(env, (delegate, sel, animation_id, finished, context));
+        }
+    }
+    release(env, animation_id);
+}
++ (())setAnimationDelegate:(id)delegate {
+    ANIMATION_BLOCKS.with(|blocks| {
+        if let Some(block) = blocks.borrow_mut().last_mut() {
+            block.delegate = delegate;
+        }
+    });
+}
++ (())setAnimationWillStartSelector:(SEL)sel {
+    ANIMATION_BLOCKS.with(|blocks| {
+        if let Some(block) = blocks.borrow_mut().last_mut() {
+            block.will_start = (!sel.is_null()).then_some(sel);
+        }
+    });
+}
++ (())setAnimationDidStopSelector:(SEL)sel {
+    ANIMATION_BLOCKS.with(|blocks| {
+        if let Some(block) = blocks.borrow_mut().last_mut() {
+            block.did_stop = (!sel.is_null()).then_some(sel);
+        }
+    });
+}
++ (())setAnimationDuration:(f64)_duration {}
++ (())setAnimationDelay:(f64)_delay {}
++ (())setAnimationStartDate:(id)_date {}
++ (())setAnimationCurve:(NSInteger)_curve {}
++ (())setAnimationRepeatCount:(f32)_count {}
++ (())setAnimationRepeatAutoreverses:(bool)_autoreverses {}
++ (())setAnimationBeginsFromCurrentState:(bool)_from_current {}
++ (())setAnimationTransition:(NSInteger)_transition
+                     forView:(id)_view
+                       cache:(bool)_cache {}
++ (())setAnimationsEnabled:(bool)_enabled {}
++ (bool)areAnimationsEnabled {
+    true
+}
 
 + (id)allocWithZone:(NSZonePtr)_zone {
     let host_object = Box::<UIViewHostObject>::default();
