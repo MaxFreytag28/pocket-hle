@@ -30,6 +30,7 @@ pub mod ns_exception;
 pub mod ns_file_handle;
 pub mod ns_file_manager;
 mod nib_archive;
+pub mod ns_index_path;
 pub mod ns_keyed_archiver;
 pub mod ns_keyed_unarchiver;
 pub mod ns_locale;
@@ -74,6 +75,7 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
         ns_error::CLASSES,
         ns_file_handle::CLASSES,
         ns_file_manager::CLASSES,
+        ns_index_path::CLASSES,
         ns_keyed_archiver::CLASSES,
         ns_keyed_unarchiver::CLASSES,
         ns_locale::CLASSES,
