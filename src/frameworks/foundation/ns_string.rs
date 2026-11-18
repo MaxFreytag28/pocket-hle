@@ -1194,6 +1194,27 @@ pub const CLASSES: ClassExports = objc_classes! {
     // TODO: handle over/underflow properly
     st[..cutoff].parse().unwrap_or(0)
 }
+- (i64)longLongValue {
+    let st = to_rust_string(env, this);
+    let st = st.trim_start();
+    let mut cutoff = st.len();
+    for (i, c) in st.char_indices() {
+        if !(c.is_ascii_digit() || (i == 0 && (c == '+' || c == '-'))) {
+            cutoff = i;
+            break;
+        }
+    }
+    // Out-of-range values saturate, as on iOS.
+    let digits = &st[..cutoff];
+    digits.parse::<i64>().unwrap_or_else(|_| {
+        let has_digits = digits.bytes().any(|b| b.is_ascii_digit());
+        match (has_digits, digits.starts_with('-')) {
+            (false, _) => 0,
+            (true, true) => i64::MIN,
+            (true, false) => i64::MAX,
+        }
+    })
+}
 
 - (id)lowercaseString {
     // TODO: check if rust methods are consistent with ObjC one
