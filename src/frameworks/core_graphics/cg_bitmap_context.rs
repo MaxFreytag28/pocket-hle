@@ -291,11 +291,40 @@ fn get_pixel(
     );
 
     (
-        gamma_decode(pixel.0),
-        gamma_decode(pixel.1),
-        gamma_decode(pixel.2),
+        gamma_decode_u8(pixels[first_component_idx + pixel_offset.0]),
+        gamma_decode_u8(pixels[first_component_idx + pixel_offset.1]),
+        gamma_decode_u8(pixels[first_component_idx + pixel_offset.2]),
         pixel.3,
     )
+}
+
+/// [gamma_decode] for an 8-bit component, from a table (it's a hot path).
+fn gamma_decode_u8(component: u8) -> f32 {
+    static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| std::array::from_fn(|i| gamma_decode(i as f32 / 255.0)))
+        [component as usize]
+}
+
+/// Gamma-encode a linear color to 8-bit components. Drawing usually puts the
+/// same color many times, so the last result is remembered.
+fn encode_rgb(r: f32, g: f32, b: f32) -> (u8, u8, u8) {
+    thread_local! {
+        static LAST: std::cell::Cell<Option<([u32; 3], (u8, u8, u8))>> =
+            const { std::cell::Cell::new(None) };
+    }
+    let key = [r.to_bits(), g.to_bits(), b.to_bits()];
+    if let Some((last_key, encoded)) = LAST.get() {
+        if last_key == key {
+            return encoded;
+        }
+    }
+    let encoded = (
+        (gamma_encode(r) * 255.0) as u8,
+        (gamma_encode(g) * 255.0) as u8,
+        (gamma_encode(b) * 255.0) as u8,
+    );
+    LAST.set(Some((key, encoded)));
+    encoded
 }
 
 fn put_pixel(
@@ -321,11 +350,18 @@ fn put_pixel(
     let pixel_size = bytes_per_pixel(data);
     let first_component_idx = (y * data.bytes_per_row + x * pixel_size) as usize;
 
-    let bg_pixel = get_pixel(data, pixels, first_component_idx);
+    // Blending a fully transparent color changes nothing, and blending an
+    // opaque one gives that color: both are common (e.g. around and inside
+    // text glyphs) and need no reading of the old pixel.
+    if blend && pixel.3 <= 0.0 {
+        return;
+    }
+    let blend = blend && pixel.3 < 1.0;
 
     // Blending like this must be done in linear RGB, so this must come before
     // gamma encoding.
     let (r, g, b, a) = if blend {
+        let bg_pixel = get_pixel(data, pixels, first_component_idx);
         match data.alpha_info {
             kCGImageAlphaLast | kCGImageAlphaFirst => blend_straight(bg_pixel, pixel),
             kCGImageAlphaPremultipliedLast | kCGImageAlphaPremultipliedFirst => {
@@ -339,16 +375,16 @@ fn put_pixel(
     };
 
     // Alpha is always linear.
-    let (r, g, b) = (gamma_encode(r), gamma_encode(g), gamma_encode(b));
     let pixel_offset = pixel_offsets(data);
     match data.alpha_info {
         kCGImageAlphaOnly => {
             pixels[first_component_idx] = (a * 255.0) as u8;
         }
         _ => {
-            pixels[first_component_idx + pixel_offset.0] = (r * 255.0) as u8;
-            pixels[first_component_idx + pixel_offset.1] = (g * 255.0) as u8;
-            pixels[first_component_idx + pixel_offset.2] = (b * 255.0) as u8;
+            let (r, g, b) = encode_rgb(r, g, b);
+            pixels[first_component_idx + pixel_offset.0] = r;
+            pixels[first_component_idx + pixel_offset.1] = g;
+            pixels[first_component_idx + pixel_offset.2] = b;
             if let Some(alpha_offset) = pixel_offset.3 {
                 pixels[first_component_idx + alpha_offset] = (a * 255.0) as u8;
             }
