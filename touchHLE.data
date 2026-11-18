@@ -199,6 +199,9 @@ com.sandlotgames.snailmail: --landscape-left
 
 # Snail Mail
 com.sandlotgames.iSM: --landscape-left --scale-hack=3
+
+# FeuchOasen (e-book): sharper text
+com.bluepantherbooks.FeuchOasen: --scale-hack=3
 		    GNU GENERAL PUBLIC LICENSE
 		       Version 2, June 1991
 
